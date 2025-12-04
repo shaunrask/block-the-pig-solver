@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Block the Pig - AI Solver</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Block the Pig <span class="ai-badge">AI Powered</span></h1>
+            <p>Trap the pig before it escapes!</p>
+        </header>
+
+        <div class="game-area">
+            <canvas id="hexGrid" width="600" height="600"></canvas>
+            
+            <div class="controls">
+                <div class="status-panel">
+                    <div class="status-item">
+                        <span class="label">Turn</span>
+                        <span id="turnIndicator" class="value player-turn">Your Turn</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Walls</span>
+                        <span id="wallCount" class="value">0</span>
+                    </div>
+                </div>
+                
+                <button id="aiMoveBtn" class="btn primary-btn">
+                    <span class="icon">✨</span> Ask AI for Best Move
+                </button>
+                <button id="resetBtn" class="btn secondary-btn">Reset Game</button>
+            </div>
+        </div>
+        
+        <div id="messageOverlay" class="overlay hidden">
+            <div class="message-box">
+                <h2 id="messageTitle">Game Over</h2>
+                <p id="messageText"></p>
+                <button id="overlayResetBtn" class="btn primary-btn">Play Again</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='game.js') }}"></script>
+</body>
+</html>
