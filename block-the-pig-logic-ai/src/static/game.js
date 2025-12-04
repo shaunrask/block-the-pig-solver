@@ -25,9 +25,10 @@ const NUM_ROWS = ROW_MAX - ROW_MIN + 1; // 11
 const PIG_START_COL = 2;  // middle column (0..4)
 const PIG_START_ROW = 5;  // middle row   (0..10)
 
-const HEX_SIZE = 25;
-const CENTER_X = canvas.width / 2;
-const CENTER_Y = canvas.height / 2;
+const HEX_SIZE_DEFAULT = 25;
+let HEX_SIZE = HEX_SIZE_DEFAULT;
+let CENTER_X = canvas.width / 2;
+let CENTER_Y = canvas.height / 2;
 const SQRT3 = Math.sqrt(3);
 
 let pigPos = { q: PIG_START_COL, r: PIG_START_ROW }; // q=col, r=row
@@ -45,7 +46,37 @@ function basePixelForCell(col, row) {
     const y = HEX_SIZE * 1.5 * row;
     return { x, y };
 }
-const PIG_BASE_POS = basePixelForCell(PIG_START_COL, PIG_START_ROW);
+let PIG_BASE_POS = basePixelForCell(PIG_START_COL, PIG_START_ROW);
+
+function resizeCanvas() {
+    const container = document.querySelector('.main-area');
+    if (!container) return;
+
+    canvas.width = container.clientWidth;
+    canvas.height = container.clientHeight;
+    CENTER_X = canvas.width / 2;
+    CENTER_Y = canvas.height / 2;
+
+    // Calculate HEX_SIZE to fit
+    // Board width approx: (NUM_COLS + 0.5) * HEX_SIZE * sqrt(3)
+    // Board height approx: (NUM_ROWS * 1.5 + 0.5) * HEX_SIZE
+    // We add some padding (0.8 factor)
+    const boardWidthHex = (NUM_COLS + 1) * SQRT3;
+    const boardHeightHex = (NUM_ROWS * 1.5 + 1);
+
+    const sizeW = (canvas.width * 0.8) / boardWidthHex;
+    const sizeH = (canvas.height * 0.8) / boardHeightHex;
+    HEX_SIZE = Math.min(sizeW, sizeH);
+
+    // Recalculate base pos with new HEX_SIZE
+    PIG_BASE_POS = basePixelForCell(PIG_START_COL, PIG_START_ROW);
+
+    drawBoard();
+}
+
+window.addEventListener('resize', resizeCanvas);
+// Call once after script load (at bottom) or now
+setTimeout(resizeCanvas, 0);
 
 // =======================
 // Hex Utilities (odd-row offset, pointy-top)
@@ -89,20 +120,20 @@ function getNeighbors(q, r) {
     // row is even
     const dirsEven = [
         { q: +1, r: 0 },   // E
-        { q:  0, r: -1 },  // NE
+        { q: 0, r: -1 },  // NE
         { q: -1, r: -1 },  // NW
         { q: -1, r: 0 },   // W
         { q: -1, r: +1 },  // SW
-        { q:  0, r: +1 }   // SE
+        { q: 0, r: +1 }   // SE
     ];
 
     // row is odd
     const dirsOdd = [
         { q: +1, r: 0 },   // E
         { q: +1, r: -1 },  // NE
-        { q:  0, r: -1 },  // NW
+        { q: 0, r: -1 },  // NW
         { q: -1, r: 0 },   // W
-        { q:  0, r: +1 },  // SW
+        { q: 0, r: +1 },  // SW
         { q: +1, r: +1 }   // SE
     ];
 
@@ -147,7 +178,7 @@ function isEscape(q, r) {
 // =======================
 // Drawing
 // =======================
-function drawHex(q, r, color, strokeColor = '#334155', lineWidth = 1) {
+function drawHex(q, r, color, strokeColor = '#cbd5e1', lineWidth = 1) {
     const { x, y } = hexToPixel(q, r);
     ctx.beginPath();
     for (let i = 0; i < 6; i++) {
@@ -178,12 +209,13 @@ function drawBoard() {
         for (let r = ROW_MIN; r <= ROW_MAX; r++) {
             if (!isPlayableCell(q, r)) continue;
 
-            let fill = '#1e293b';
-            let stroke = '#0f172a';
-            let lineWidth = 1.5;
+            let fill = '#f1f5f9'; // Light slate
+            let stroke = '#cbd5e1'; // Lighter slate border
+            let lineWidth = 1;
 
             if (hasWall(q, r)) {
-                fill = '#64748b';
+                fill = '#475569'; // Dark slate for walls
+                stroke = '#334155'; // Darker border
                 lineWidth = 2;
             }
 
@@ -192,11 +224,11 @@ function drawBoard() {
     }
 
     // Draw pig on top
-    drawHex(pigPos.q, pigPos.r, '#ec4899', '#be185d', 3);
+    drawHex(pigPos.q, pigPos.r, '#fce7f3', '#db2777', 3);
 
     const { x, y } = hexToPixel(pigPos.q, pigPos.r);
-    ctx.fillStyle = 'white';
-    ctx.font = 'bold 16px Outfit';
+    ctx.fillStyle = '#db2777';
+    ctx.font = 'bold 20px Outfit';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('🐷', x, y);
