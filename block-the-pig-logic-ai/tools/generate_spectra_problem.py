@@ -1,5 +1,5 @@
 def generate_spectra_problem():
-    radius = 2
+    radius = 4
     cells = []
     adjacencies = []
     escapes = []

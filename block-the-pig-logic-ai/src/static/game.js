@@ -9,72 +9,150 @@ const messageTitle = document.getElementById('messageTitle');
 const messageText = document.getElementById('messageText');
 const overlayResetBtn = document.getElementById('overlayResetBtn');
 
-// Game State
-const RADIUS = 5; // Updated to 5
-const HEX_SIZE = 25; // Smaller hexes for larger grid
+// =======================
+// Game State / Config
+// =======================
+
+// Board is 5 columns (0..4) x 11 rows (0..10)
+const COL_MIN = 0;
+const COL_MAX = 4;
+const ROW_MIN = 0;
+const ROW_MAX = 10;
+const NUM_COLS = COL_MAX - COL_MIN + 1; // 5
+const NUM_ROWS = ROW_MAX - ROW_MIN + 1; // 11
+
+// Pig starts in the visual center row/column
+const PIG_START_COL = 2;  // middle column (0..4)
+const PIG_START_ROW = 5;  // middle row   (0..10)
+
+const HEX_SIZE = 25;
 const CENTER_X = canvas.width / 2;
 const CENTER_Y = canvas.height / 2;
+const SQRT3 = Math.sqrt(3);
 
-let pigPos = { q: 0, r: 0 };
+let pigPos = { q: PIG_START_COL, r: PIG_START_ROW }; // q=col, r=row
 let walls = [];
 let turn = 'PLAYER'; // 'PLAYER' or 'PIG'
 let isGameOver = false;
-let wallsPlacedCount = 0; // Track player moves
+let wallsPlacedCount = 0; // Track player wall moves
 
-// Hex Utilities
+// Precompute the center offset so that (PIG_START_COL, PIG_START_ROW) is at canvas center
+function basePixelForCell(col, row) {
+    // Odd-row (row) offset, pointy-topped layout:
+    // x' = size * sqrt(3) * (col + 0.5*(row%2))
+    // y' = size * 1.5 * row
+    const x = HEX_SIZE * SQRT3 * (col + 0.5 * (row & 1));
+    const y = HEX_SIZE * 1.5 * row;
+    return { x, y };
+}
+const PIG_BASE_POS = basePixelForCell(PIG_START_COL, PIG_START_ROW);
+
+// =======================
+// Hex Utilities (odd-row offset, pointy-top)
+// =======================
+
+// Cell -> pixel (center) relative to canvas
 function hexToPixel(q, r) {
-    const x = HEX_SIZE * (3 / 2 * q);
-    const y = HEX_SIZE * (Math.sqrt(3) / 2 * q + Math.sqrt(3) * r);
-    return { x: x + CENTER_X, y: y + CENTER_Y };
+    const base = basePixelForCell(q, r);
+    // Center the board so the pig's start cell is at canvas center
+    const dx = base.x - PIG_BASE_POS.x;
+    const dy = base.y - PIG_BASE_POS.y;
+    return { x: CENTER_X + dx, y: CENTER_Y + dy };
 }
 
+// For clicks: brute-force search nearest cell center.
+// Board is small (55 cells), so this is simple & robust.
 function pixelToHex(x, y) {
-    const q = (2 / 3 * (x - CENTER_X)) / HEX_SIZE;
-    const r = ((-1 / 3 * (x - CENTER_X) + Math.sqrt(3) / 3 * (y - CENTER_Y))) / HEX_SIZE;
-    return hexRound(q, r);
-}
+    let bestCell = null;
+    let bestDist2 = Infinity;
 
-function hexRound(q, r) {
-    let s = -q - r;
-    let rq = Math.round(q);
-    let rr = Math.round(r);
-    let rs = Math.round(s);
-
-    const q_diff = Math.abs(rq - q);
-    const r_diff = Math.abs(rr - r);
-    const s_diff = Math.abs(rs - s);
-
-    if (q_diff > r_diff && q_diff > s_diff) {
-        rq = -rr - rs;
-    } else if (r_diff > s_diff) {
-        rr = -rq - rs;
+    for (let q = COL_MIN; q <= COL_MAX; q++) {
+        for (let r = ROW_MIN; r <= ROW_MAX; r++) {
+            const { x: cx, y: cy } = hexToPixel(q, r);
+            const dx = cx - x;
+            const dy = cy - y;
+            const dist2 = dx * dx + dy * dy;
+            if (dist2 < bestDist2 && dist2 <= HEX_SIZE * HEX_SIZE) {
+                bestDist2 = dist2;
+                bestCell = { q, r };
+            }
+        }
     }
-    return { q: rq, r: rr };
+
+    return bestCell; // may be null if click was far from any hex
 }
 
+// Odd-row neighbors (pointy-top, redblobgames "odd-r" horizontal layout)
 function getNeighbors(q, r) {
-    const directions = [
-        { q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 },
-        { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }
+    const isOdd = r & 1;
+
+    // row is even
+    const dirsEven = [
+        { q: +1, r: 0 },   // E
+        { q:  0, r: -1 },  // NE
+        { q: -1, r: -1 },  // NW
+        { q: -1, r: 0 },   // W
+        { q: -1, r: +1 },  // SW
+        { q:  0, r: +1 }   // SE
     ];
-    return directions.map(d => ({ q: q + d.q, r: r + d.r }));
+
+    // row is odd
+    const dirsOdd = [
+        { q: +1, r: 0 },   // E
+        { q: +1, r: -1 },  // NE
+        { q:  0, r: -1 },  // NW
+        { q: -1, r: 0 },   // W
+        { q:  0, r: +1 },  // SW
+        { q: +1, r: +1 }   // SE
+    ];
+
+    const dirs = isOdd ? dirsOdd : dirsEven;
+    return dirs.map(d => ({ q: q + d.q, r: r + d.r }));
 }
 
-function isValidCell(q, r) {
-    return Math.abs(q + r) <= RADIUS && Math.abs(q) <= RADIUS && Math.abs(r) <= RADIUS;
+// =======================
+// Board Helpers
+// =======================
+function isInsideBoard(q, r) {
+    return (
+        q >= COL_MIN && q <= COL_MAX &&
+        r >= ROW_MIN && r <= ROW_MAX
+    );
 }
 
+function isPlayableCell(q, r) {
+    return isInsideBoard(q, r);
+}
+
+function hasWall(q, r) {
+    return walls.some(w => w.q === q && w.r === r);
+}
+
+/**
+ * Escape rule:
+ * A cell is an escape cell if it lies on the border of the 5×11 board.
+ * Pig escapes immediately upon stepping onto any border cell.
+ */
 function isEscape(q, r) {
-    return Math.abs(q) === RADIUS || Math.abs(r) === RADIUS || Math.abs(q + r) === RADIUS;
+    if (!isInsideBoard(q, r)) return false;
+
+    return (
+        q === COL_MIN ||
+        q === COL_MAX ||
+        r === ROW_MIN ||
+        r === ROW_MAX
+    );
 }
 
+// =======================
 // Drawing
+// =======================
 function drawHex(q, r, color, strokeColor = '#334155', lineWidth = 1) {
     const { x, y } = hexToPixel(q, r);
     ctx.beginPath();
     for (let i = 0; i < 6; i++) {
-        const angle_deg = 60 * i;
-        const angle_rad = Math.PI / 180 * angle_deg;
+        // 30° offset for "point-up" hexes
+        const angle_rad = Math.PI / 180 * (60 * i + 30);
         const px = x + HEX_SIZE * Math.cos(angle_rad);
         const py = y + HEX_SIZE * Math.sin(angle_rad);
         if (i === 0) ctx.moveTo(px, py);
@@ -91,26 +169,31 @@ function drawHex(q, r, color, strokeColor = '#334155', lineWidth = 1) {
 function drawBoard() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw Grid
-    for (let q = -RADIUS; q <= RADIUS; q++) {
-        for (let r = -RADIUS; r <= RADIUS; r++) {
-            if (isValidCell(q, r)) {
-                let color = '#1e293b'; // Default cell
+    // Draw 5×11 staggered rows:
+    // row0:  XXXXX
+    // row1:   XXXXX
+    // row2:  XXXXX
+    // etc.
+    for (let q = COL_MIN; q <= COL_MAX; q++) {
+        for (let r = ROW_MIN; r <= ROW_MAX; r++) {
+            if (!isPlayableCell(q, r)) continue;
 
-                // Check if wall
-                if (walls.some(w => w.q === q && w.r === r)) {
-                    color = '#64748b';
-                }
+            let fill = '#1e293b';
+            let stroke = '#0f172a';
+            let lineWidth = 1.5;
 
-                drawHex(q, r, color);
+            if (hasWall(q, r)) {
+                fill = '#64748b';
+                lineWidth = 2;
             }
+
+            drawHex(q, r, fill, stroke, lineWidth);
         }
     }
 
-    // Draw Pig
+    // Draw pig on top
     drawHex(pigPos.q, pigPos.r, '#ec4899', '#be185d', 3);
 
-    // Draw "P" text
     const { x, y } = hexToPixel(pigPos.q, pigPos.r);
     ctx.fillStyle = 'white';
     ctx.font = 'bold 16px Outfit';
@@ -119,7 +202,9 @@ function drawBoard() {
     ctx.fillText('🐷', x, y);
 }
 
+// =======================
 // Game Logic
+// =======================
 function checkGameOver() {
     // 1. Pig Escaped?
     if (isEscape(pigPos.q, pigPos.r)) {
@@ -128,7 +213,6 @@ function checkGameOver() {
     }
 
     // 2. Pig Trapped?
-    // BFS to see if ANY escape is reachable
     if (!canReachEscape(pigPos)) {
         endGame(true, "You Trapped the Pig!");
         return true;
@@ -150,7 +234,11 @@ function canReachEscape(startPos) {
         let neighbors = getNeighbors(current.q, current.r);
         for (let n of neighbors) {
             let key = `${n.q},${n.r}`;
-            if (isValidCell(n.q, n.r) && !visited.has(key) && !walls.some(w => w.q === n.q && w.r === n.r)) {
+            if (
+                isPlayableCell(n.q, n.r) &&
+                !visited.has(key) &&
+                !hasWall(n.q, n.r)
+            ) {
                 visited.add(key);
                 queue.push(n);
             }
@@ -168,21 +256,25 @@ function endGame(win, message) {
 }
 
 function resetGame() {
-    pigPos = { q: 0, r: 0 };
+    pigPos = { q: PIG_START_COL, r: PIG_START_ROW };
     walls = [];
     turn = 'PLAYER';
     isGameOver = false;
     wallsPlacedCount = 0;
 
-    // Generate Random Walls (5-15)
+    // Random walls (5–15) anywhere on the board except pig start
     const numWalls = Math.floor(Math.random() * 11) + 5;
     for (let i = 0; i < numWalls; i++) {
         let valid = false;
         while (!valid) {
-            let q = Math.floor(Math.random() * (2 * RADIUS + 1)) - RADIUS;
-            let r = Math.floor(Math.random() * (2 * RADIUS + 1)) - RADIUS;
+            let q = Math.floor(Math.random() * NUM_COLS) + COL_MIN;
+            let r = Math.floor(Math.random() * NUM_ROWS) + ROW_MIN;
 
-            if (isValidCell(q, r) && (q !== 0 || r !== 0) && !walls.some(w => w.q === q && w.r === r)) {
+            if (
+                isPlayableCell(q, r) &&
+                (q !== pigPos.q || r !== pigPos.r) &&
+                !hasWall(q, r)
+            ) {
                 walls.push({ q, r });
                 valid = true;
             }
@@ -212,7 +304,9 @@ function updateUI() {
     aiMoveBtn.disabled = turn !== 'PLAYER' || isGameOver;
 }
 
+// =======================
 // Interaction
+// =======================
 canvas.addEventListener('click', (e) => {
     if (isGameOver || turn !== 'PLAYER') return;
 
@@ -221,32 +315,37 @@ canvas.addEventListener('click', (e) => {
     const y = e.clientY - rect.top;
     const hex = pixelToHex(x, y);
 
-    if (isValidCell(hex.q, hex.r)) {
-        // Check if empty
-        if (hex.q === pigPos.q && hex.r === pigPos.r) return;
-        if (walls.some(w => w.q === hex.q && w.r === hex.r)) return;
+    if (!hex) return; // clicked outside any cell
 
-        // Place Wall
-        walls.push(hex);
-        wallsPlacedCount++;
+    const { q, r } = hex;
 
-        updateUI();
-        drawBoard();
+    if (!isPlayableCell(q, r)) return;
 
-        if (!checkGameOver()) {
-            // Check Phase
-            if (wallsPlacedCount >= 3) {
-                turn = 'PIG';
-                setTimeout(pigTurn, 500);
-            } else {
-                // Still Opening Phase, Player keeps turn
-                turn = 'PLAYER';
-                updateUI();
-            }
+    // Check if empty
+    if (q === pigPos.q && r === pigPos.r) return;
+    if (hasWall(q, r)) return;
+
+    // Place Wall
+    walls.push({ q, r });
+    wallsPlacedCount++;
+
+    updateUI();
+    drawBoard();
+
+    if (!checkGameOver()) {
+        if (wallsPlacedCount >= 3) {
+            turn = 'PIG';
+            setTimeout(pigTurn, 500);
+        } else {
+            turn = 'PLAYER';
+            updateUI();
         }
     }
 });
 
+// =======================
+// Pig Turn
+// =======================
 function pigTurn() {
     if (isGameOver) return;
 
@@ -261,24 +360,24 @@ function pigTurn() {
         let { pos, path } = queue.shift();
 
         if (isEscape(pos.q, pos.r)) {
-            // Found shortest path!
-            // Move is the first step in path
             if (path.length > 0) {
                 bestMove = path[0];
             } else {
-                // Already at escape (should be caught by checkGameOver)
                 bestMove = pos;
             }
             break;
         }
 
         let neighbors = getNeighbors(pos.q, pos.r);
-        // Randomize neighbors for variety in tie-breaking
-        neighbors.sort(() => Math.random() - 0.5);
+        neighbors.sort(() => Math.random() - 0.5); // variety
 
         for (let n of neighbors) {
             let key = `${n.q},${n.r}`;
-            if (isValidCell(n.q, n.r) && !visited.has(key) && !walls.some(w => w.q === n.q && w.r === n.r)) {
+            if (
+                isPlayableCell(n.q, n.r) &&
+                !visited.has(key) &&
+                !hasWall(n.q, n.r)
+            ) {
                 visited.add(key);
                 let newPath = [...path, n];
                 queue.push({ pos: n, path: newPath });
@@ -289,10 +388,10 @@ function pigTurn() {
     if (bestMove) {
         pigPos = bestMove;
     } else {
-        // No path to escape? Move randomly to a free neighbor (stalling)
+        // No path to escape? Move randomly to a free playable neighbor
         const neighbors = getNeighbors(pigPos.q, pigPos.r);
         const validMoves = neighbors.filter(n =>
-            isValidCell(n.q, n.r) && !walls.some(w => w.q === n.q && w.r === n.r)
+            isPlayableCell(n.q, n.r) && !hasWall(n.q, n.r)
         );
         if (validMoves.length > 0) {
             pigPos = validMoves[0];
@@ -305,7 +404,9 @@ function pigTurn() {
     checkGameOver();
 }
 
+// =======================
 // AI Integration
+// =======================
 aiMoveBtn.addEventListener('click', async () => {
     if (turn !== 'PLAYER' || isGameOver) return;
 
@@ -324,20 +425,22 @@ aiMoveBtn.addEventListener('click', async () => {
         const data = await response.json();
 
         if (data.move) {
-            // Execute AI Move
-            walls.push(data.move);
-            wallsPlacedCount++;
+            const { q, r } = data.move;
+            if (isPlayableCell(q, r) && !hasWall(q, r) && (q !== pigPos.q || r !== pigPos.r)) {
+                walls.push({ q, r });
+                wallsPlacedCount++;
 
-            updateUI();
-            drawBoard();
+                updateUI();
+                drawBoard();
 
-            if (!checkGameOver()) {
-                if (wallsPlacedCount >= 3) {
-                    turn = 'PIG';
-                    setTimeout(pigTurn, 500);
-                } else {
-                    turn = 'PLAYER';
-                    updateUI();
+                if (!checkGameOver()) {
+                    if (wallsPlacedCount >= 3) {
+                        turn = 'PIG';
+                        setTimeout(pigTurn, 500);
+                    } else {
+                        turn = 'PLAYER';
+                        updateUI();
+                    }
                 }
             }
         } else {

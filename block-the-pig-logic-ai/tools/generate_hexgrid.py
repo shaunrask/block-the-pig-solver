@@ -52,4 +52,4 @@ def generate_hex_grid(radius):
         f.write("\n".join(output))
 
 if __name__ == "__main__":
-    generate_hex_grid(2)
+    generate_hex_grid(4)

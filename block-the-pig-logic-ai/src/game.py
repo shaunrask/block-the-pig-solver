@@ -3,7 +3,7 @@ import time
 
 class BlockThePigGame:
     def __init__(self):
-        self.radius = 2
+        self.radius = 4
         self.pig_pos = (0, 0)
         self.walls = set()
         self.escapes = self._generate_escapes()

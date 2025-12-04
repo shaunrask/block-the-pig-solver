@@ -58,7 +58,7 @@ def get_move():
         return jsonify({'error': str(e)}), 500
 
 def generate_spectra_problem(pig_pos, walls, phase):
-    radius = 5 # Updated to Radius 5
+    radius = 4 # Updated to Radius 4
     cells = []
     adjacencies = []
     escapes = []
