@@ -1,0 +1,16 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Block the Pig — ShadowAdjudicator Strategy Refinement
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+strategy badMove(w : Cell) :-
+    HasWall(w) &
+    Escape(w).
+
+eliminate badMove.
+
+strategy lostPattern(a,b : Cell) :-
+    Adjacent(a,b) &
+    Free(a) &
+    Free(b).
+
+eliminate lostPattern.

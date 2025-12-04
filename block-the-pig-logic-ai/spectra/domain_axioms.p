@@ -1,0 +1,1 @@
+;; Domain axioms placeholder
