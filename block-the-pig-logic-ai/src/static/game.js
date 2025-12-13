@@ -457,6 +457,26 @@ aiMoveBtn.addEventListener('click', async () => {
         const data = await response.json();
 
         if (data.move) {
+            // Display Thoughts
+            const thoughtLog = document.getElementById('thoughtLog');
+            thoughtLog.innerHTML = ''; // Clear placeholder
+
+            if (data.thoughts && data.thoughts.length > 0) {
+                data.thoughts.forEach(thought => {
+                    const p = document.createElement('p');
+                    p.textContent = `> ${thought}`;
+
+                    // Simple highlighting
+                    if (thought.includes("Decision")) p.className = "highlight";
+                    if (thought.includes("Spectra confirms")) p.className = "success";
+                    if (thought.includes("Spectra suggested")) p.className = "warning";
+
+                    thoughtLog.appendChild(p);
+                });
+                // Scroll to bottom
+                thoughtLog.scrollTop = thoughtLog.scrollHeight;
+            }
+
             const { q, r } = data.move;
             if (isPlayableCell(q, r) && !hasWall(q, r) && (q !== pigPos.q || r !== pigPos.r)) {
                 walls.push({ q, r });

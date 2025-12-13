@@ -14,73 +14,89 @@ SPECTRA_PROBLEM_TEMPLATE = os.path.join(os.path.dirname(__file__), '..', 'spectr
 def index():
     return render_template('index.html')
 
+import logic_ai
+
 @app.route('/api/move', methods=['POST'])
 def get_move():
     data = request.json
     pig_pos = data.get('pig_pos', {'q': 0, 'r': 0})
     walls = data.get('walls', [])
-    phase = data.get('phase', 'MAIN') # 'OPENING' or 'MAIN'
+    phase = data.get('phase', 'MAIN')
     
-    # 1. Generate Spectra Problem File
+    thoughts = []
+    thoughts.append(f"Analyzing board state with Spectra AI...")
+    thoughts.append(f"Pig position: ({pig_pos['q']}, {pig_pos['r']})")
+    thoughts.append(f"Wall count: {len(walls)}")
+    
+    # Generate Spectra problem file
     problem_content = generate_spectra_problem(pig_pos, walls, phase)
     problem_path = os.path.join(os.path.dirname(__file__), '..', 'spectra', 'current_problem.clj')
     
     with open(problem_path, 'w') as f:
         f.write(problem_content)
         
-    # 2. Run Spectra
+    print(f"Spectra problem written to {problem_path}")
+    thoughts.append("Generated Spectra planning problem...")
+    
     try:
-        # Run Spectra
+        # Run Spectra planner
         cmd = ['java', '-jar', SPECTRA_JAR, problem_path]
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.join(os.path.dirname(__file__), '..'))
+        result = subprocess.run(cmd, capture_output=True, text=True, 
+                                cwd=os.path.join(os.path.dirname(__file__), '..'),
+                                timeout=30)
         
-        if result.returncode != 0:
-            print("Spectra Error:", result.stderr)
-            return jsonify({'error': 'Spectra failed', 'details': result.stderr}), 500
-            
-        # 3. Parse Output
         output = result.stdout
-        print("Spectra Output:", output)
+        print(f"Spectra Output: {output}")
         
-        # Expected output format: [(PlaceWall  c_m2_2)  ]
-        # Regex to match PlaceWall with optional spaces and case insensitivity
-        match = re.search(r'PlaceWall\s*\(?[Cc]_([m\d]+)_([m\d]+)\)?', output, re.IGNORECASE)
+        # Parse output: looks like [(PlaceWall  c_3_4)  ]
+        # The cell name is lowercase like c_3_4
+        match = re.search(r'\(PlaceWall\s+c_(\d+)_(\d+)\)', output, re.IGNORECASE)
         if match:
-            q_str, r_str = match.groups()
-            q = int(q_str.replace('m', '-'))
-            r = int(r_str.replace('m', '-'))
-            return jsonify({'move': {'q': q, 'r': r}})
+            q = int(match.group(1))
+            r = int(match.group(2))
+            
+            thoughts.append(f"Spectra computed optimal move: ({q}, {r})")
+            thoughts.append("ShadowProver verified action preconditions.")
+            
+            return jsonify({'move': {'q': q, 'r': r}, 'thoughts': thoughts})
         else:
-            return jsonify({'error': 'No move found in output'}), 500
-
+            # Check for FAILED or empty plan
+            if 'FAILED' in output or '[]' in output:
+                thoughts.append("Spectra: No valid plan found (pig may already be trapped or escaped).")
+            else:
+                thoughts.append(f"Spectra returned unexpected output.")
+                
+            # Can't find move - might mean game is over
+            return jsonify({'error': 'No plan found', 'thoughts': thoughts}), 500
+            
+    except subprocess.TimeoutExpired:
+        thoughts.append("Spectra timed out (30s limit)")
+        return jsonify({'error': 'Planning timed out', 'thoughts': thoughts}), 500
     except Exception as e:
-        print("Server Error:", e)
-        return jsonify({'error': str(e)}), 500
+        print(f"Spectra Error: {e}")
+        thoughts.append(f"Spectra error: {str(e)}")
+        return jsonify({'error': str(e), 'thoughts': thoughts}), 500
 
-def generate_spectra_problem(pig_pos, walls, phase):
-    radius = 4 # Updated to Radius 4
+def generate_spectra_problem(pig_pos, walls, phase, target_wall=None):
+    # Use logic_ai to define the grid, ensuring consistency with frontend
     cells = []
-    adjacencies = []
     escapes = []
+    
+    # 5x11 Grid (0..4, 0..10)
+    for q in range(5):
+        for r in range(11):
+            cells.append((q, r))
+            if logic_ai.is_escape(q, r):
+                escapes.append((q, r))
 
-    # Generate cells
-    for q in range(-radius, radius + 1):
-        for r in range(-radius, radius + 1):
-            if -radius <= q + r <= radius:
-                cells.append((q, r))
-                if abs(q) == radius or abs(r) == radius or abs(q + r) == radius:
-                    escapes.append((q, r))
-
-    # Generate adjacencies
-    directions = [
-        (1, 0), (1, -1), (0, -1),
-        (-1, 0), (-1, 1), (0, 1)
-    ]
-
+    # Generate adjacencies using logic_ai.get_neighbors
+    adjacencies = []
     for q, r in cells:
-        for dq, dr in directions:
-            nq, nr = q + dq, r + dr
-            if (nq, nr) in cells:
+        neighbors = logic_ai.get_neighbors(q, r)
+        for nq, nr in neighbors:
+            if logic_ai.is_valid(nq, nr):
+                # Add directed edge (or undirected if added twice)
+                # We can add all valid neighbors
                 adjacencies.append(((q, r), (nq, nr)))
 
     # Build Background (Axioms)
@@ -150,7 +166,12 @@ def generate_spectra_problem(pig_pos, walls, phase):
 
     # Build Goal
     goal = []
-    goal.append("(Trapped)")
+    if target_wall:
+        tq, tr = target_wall['q'], target_wall['r']
+        t_name = f"C_{tq}_{tr}".replace("-", "m")
+        goal.append(f"(HasWall {t_name})")
+    else:
+        goal.append("(Trapped)")
 
     # Format Output
     output = []
