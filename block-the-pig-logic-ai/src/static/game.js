@@ -510,5 +510,116 @@ aiMoveBtn.addEventListener('click', async () => {
 resetBtn.addEventListener('click', resetGame);
 overlayResetBtn.addEventListener('click', resetGame);
 
+// =======================
+// Auto Complete Feature
+// =======================
+const autoCompleteBtn = document.getElementById('autoCompleteBtn');
+let isAutoPlaying = false;
+
+async function autoPlayStep() {
+    if (isGameOver || !isAutoPlaying) {
+        stopAutoPlay();
+        return;
+    }
+
+    if (turn !== 'PLAYER') {
+        // Wait for pig's turn to complete
+        setTimeout(autoPlayStep, 300);
+        return;
+    }
+
+    const phase = wallsPlacedCount < 3 ? 'OPENING' : 'MAIN';
+
+    try {
+        const response = await fetch('/api/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pig_pos: pigPos, walls: walls, phase: phase })
+        });
+
+        const data = await response.json();
+
+        if (data.move && isAutoPlaying) {
+            // Display Thoughts
+            const thoughtLog = document.getElementById('thoughtLog');
+            thoughtLog.innerHTML = '';
+
+            if (data.thoughts && data.thoughts.length > 0) {
+                data.thoughts.forEach(thought => {
+                    const p = document.createElement('p');
+                    p.textContent = `> ${thought}`;
+                    if (thought.includes("computed") || thought.includes("Decision")) p.className = "highlight";
+                    if (thought.includes("ShadowProver")) p.className = "success";
+                    thoughtLog.appendChild(p);
+                });
+                thoughtLog.scrollTop = thoughtLog.scrollHeight;
+            }
+
+            const { q, r } = data.move;
+            if (isPlayableCell(q, r) && !hasWall(q, r) && (q !== pigPos.q || r !== pigPos.r)) {
+                walls.push({ q, r });
+                wallsPlacedCount++;
+
+                updateUI();
+                drawBoard();
+
+                if (!checkGameOver() && isAutoPlaying) {
+                    if (wallsPlacedCount >= 3) {
+                        turn = 'PIG';
+                        // Let pig move, then continue auto-play
+                        setTimeout(() => {
+                            pigTurn();
+                            // Schedule next auto-play step after pig finishes
+                            setTimeout(autoPlayStep, 800);
+                        }, 500);
+                    } else {
+                        turn = 'PLAYER';
+                        updateUI();
+                        // Continue during opening phase (faster)
+                        setTimeout(autoPlayStep, 300);
+                    }
+                } else {
+                    stopAutoPlay();
+                }
+            } else {
+                stopAutoPlay();
+            }
+        } else {
+            stopAutoPlay();
+        }
+    } catch (err) {
+        console.error(err);
+        stopAutoPlay();
+    }
+}
+
+function startAutoPlay() {
+    if (isGameOver) {
+        resetGame();
+    }
+    isAutoPlaying = true;
+    autoCompleteBtn.innerHTML = '<span class="icon">⏹️</span> Stop Auto Play';
+    autoCompleteBtn.classList.add('active');
+    aiMoveBtn.disabled = true;
+    resetBtn.disabled = true;
+    autoPlayStep();
+}
+
+function stopAutoPlay() {
+    isAutoPlaying = false;
+    autoCompleteBtn.innerHTML = '<span class="icon">🤖</span> Auto Complete Game';
+    autoCompleteBtn.classList.remove('active');
+    aiMoveBtn.disabled = false;
+    resetBtn.disabled = false;
+}
+
+autoCompleteBtn.addEventListener('click', () => {
+    if (isAutoPlaying) {
+        stopAutoPlay();
+    } else {
+        startAutoPlay();
+    }
+});
+
 // Init
 resetGame();
