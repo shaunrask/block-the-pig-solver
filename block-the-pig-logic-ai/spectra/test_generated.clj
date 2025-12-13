@@ -8,7 +8,7 @@
     })
  ]
  :start      [
-    (Free C_3_4)
+    (Free C_3_5)
  ]
- :goal       [(HasWall C_3_4)]
+ :goal       [(HasWall C_3_5)]
 }

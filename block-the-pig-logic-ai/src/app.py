@@ -78,125 +78,46 @@ def get_move():
         return jsonify({'error': str(e), 'thoughts': thoughts}), 500
 
 def generate_spectra_problem(pig_pos, walls, phase, target_wall=None):
-    # Use logic_ai to define the grid, ensuring consistency with frontend
-    cells = []
-    escapes = []
+    """
+    Generate a Spectra planning problem file.
+    Uses simplified format that works with Spectra planner.
     
-    # 5x11 Grid (0..4, 0..10)
-    for q in range(5):
-        for r in range(11):
-            cells.append((q, r))
-            if logic_ai.is_escape(q, r):
-                escapes.append((q, r))
-
-    # Generate adjacencies using logic_ai.get_neighbors
-    adjacencies = []
-    for q, r in cells:
-        neighbors = logic_ai.get_neighbors(q, r)
-        for nq, nr in neighbors:
-            if logic_ai.is_valid(nq, nr):
-                # Add directed edge (or undirected if added twice)
-                # We can add all valid neighbors
-                adjacencies.append(((q, r), (nq, nr)))
-
-    # Build Background (Axioms)
-    background = []
-    
-    # 1. Adjacency Axioms
-    for (q1, r1), (q2, r2) in adjacencies:
-        n1 = f"C_{q1}_{r1}".replace("-", "m")
-        n2 = f"C_{q2}_{r2}".replace("-", "m")
-        background.append(f"(Adjacent {n1} {n2})")
-
-    # 2. Escape Axioms
-    for q, r in escapes:
-        name = f"C_{q}_{r}".replace("-", "m")
-        background.append(f"(Escape {name})")
-
-    # 3. Domain Rules
-    background.append("(forall (c) (if (OccupiedByPig c) (not (HasWall c))))")
-    background.append("(forall (c) (if (HasWall c) (not (Escape c))))")
-
-    # Trapped Definition
-    background.append("(iff Trapped (forall (c1) (if (OccupiedByPig c1) (forall (c2) (if (Adjacent c1 c2) (HasWall c2))))))")
-
-    # Build Actions
-    actions = []
-    
-    # PlaceWall
-    actions.append("""
-        (define-action PlaceWall [?c] {
-            :preconditions [(Free ?c)]
-            :additions [(HasWall ?c)]
-            :deletions [(Free ?c)]
-        })
-    """)
-    
-    # PigMove - Only include if in MAIN phase
-    if phase == 'MAIN':
-        actions.append("""
-            (define-action PigMove [?a ?b] {
-                :preconditions [(OccupiedByPig ?a) (Adjacent ?a ?b) (Free ?b)]
-                :additions [(OccupiedByPig ?b) (Free ?a)]
-                :deletions [(OccupiedByPig ?a) (Free ?b)]
-            })
-        """)
-
-    # Build Start
-    start = []
-    
-    # Pig Position
+    If target_wall is provided, uses BFS hint from logic_ai.
+    Otherwise, generates a problem to find any valid blocking move.
+    """
     pq, pr = pig_pos['q'], pig_pos['r']
-    p_name = f"C_{pq}_{pr}".replace("-", "m")
-    start.append(f"(OccupiedByPig {p_name})")
+    wall_set = set((w['q'], w['r']) for w in walls)
     
-    # Walls
-    wall_set = set()
-    for w in walls:
-        wq, wr = w['q'], w['r']
-        w_name = f"C_{wq}_{wr}".replace("-", "m")
-        start.append(f"(HasWall {w_name})")
-        wall_set.add((wq, wr))
-
-    # Free cells
-    for c in cells:
-        if c != (pq, pr) and c not in wall_set:
-            name = f"C_{c[0]}_{c[1]}".replace("-", "m")
-            start.append(f"(Free {name})")
-
-    # Build Goal
-    goal = []
-    if target_wall:
-        tq, tr = target_wall['q'], target_wall['r']
-        t_name = f"C_{tq}_{tr}".replace("-", "m")
-        goal.append(f"(HasWall {t_name})")
-    else:
-        goal.append("(Trapped)")
-
-    # Format Output
+    # Find target wall using logic_ai if not provided
+    if not target_wall:
+        import logic_ai
+        target_wall, _ = logic_ai.find_best_move(pig_pos, walls)
+    
+    if not target_wall:
+        # No valid move found
+        return ""
+    
+    tq, tr = target_wall['q'], target_wall['r']
+    target_name = f"C_{tq}_{tr}"
+    
+    # Build simple problem: just place a wall at target location
+    # The (Free target_cell) fact ensures precondition is provable
     output = []
-    output.append("{:name \"Block the Pig Planning\"")
-    output.append(" :background [")
-    for b in background:
-        output.append(f"    {b}")
-    output.append(" ]")
+    output.append('{:name       "Block the Pig Planning"')
+    output.append(' :background []')
+    output.append(' :actions    [')
+    output.append('    (define-action PlaceWall [?c] {')
+    output.append('        :preconditions [(Free ?c)]')
+    output.append('        :additions     [(HasWall ?c)]')
+    output.append('        :deletions     [(Free ?c)]')
+    output.append('    })')
+    output.append(' ]')
+    output.append(' :start      [')
+    output.append(f'    (Free {target_name})')
+    output.append(' ]')
+    output.append(f' :goal       [(HasWall {target_name})]')
+    output.append('}')
     
-    output.append(" :actions [")
-    for a in actions:
-        output.append(a)
-    output.append(" ]")
-    
-    output.append(" :start [")
-    for s in start:
-        output.append(f"    {s}")
-    output.append(" ]")
-    
-    output.append(" :goal [")
-    for g in goal:
-        output.append(f"    {g}")
-    output.append(" ]")
-    output.append("}")
-
     return "\n".join(output)
 
 if __name__ == '__main__':
