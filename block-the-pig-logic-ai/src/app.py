@@ -1,21 +1,52 @@
 from flask import Flask, render_template, request, jsonify
-import subprocess
-import os
-import time
+import os, re, time, json, hashlib, tempfile, subprocess
+from collections import deque
 
 app = Flask(__name__)
 
-# Grid constants (matching frontend)
+# =========================
+# UI board constants
+# =========================
 COL_MIN, COL_MAX = 0, 4
 ROW_MIN, ROW_MAX = 0, 10
 
-@app.route('/')
+# Your JS "visual center"
+UI_CENTER_Q = 2
+UI_CENTER_R = 5
+
+# =========================
+# Spectra / Java config
+# =========================
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+SPECTRA_DIR = os.path.join(PROJECT_ROOT, "spectra")
+TEMPLATE_CLJ = os.path.join(SPECTRA_DIR, "block_the_pig.clj")
+
+TOOLS_DIR = os.path.join(PROJECT_ROOT, "tools")
+SPECTRA_JAR = os.path.join(TOOLS_DIR, "Spectra.jar")
+
+JAVA17_EXE = r"C:\Program Files\Eclipse Adoptium\jdk-17.0.17.10-hotspot\bin\java.exe"
+
+# If Spectra sometimes takes ~20s on first run, caching matters a lot.
+SPECTRA_TIMEOUT_SECONDS = 45
+
+# In-memory cache: key(board_state) -> move dict
+SPECTRA_CACHE = {}
+
+DEBUG_DIR = os.path.join(PROJECT_ROOT, "spectra_debug")
+os.makedirs(DEBUG_DIR, exist_ok=True)
+
+# =========================
+# Routes
+# =========================
+@app.route("/")
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
-
-# Helper functions
+# =========================
+# UI helpers
+# =========================
 def get_neighbors(q, r):
+    # MUST match game.js odd-row rules
     if r % 2 == 0:
         return [(q+1, r), (q, r-1), (q-1, r-1), (q-1, r), (q-1, r+1), (q, r+1)]
     else:
@@ -25,15 +56,13 @@ def is_valid(q, r):
     return COL_MIN <= q <= COL_MAX and ROW_MIN <= r <= ROW_MAX
 
 def is_escape(q, r):
-    if not is_valid(q, r): return False
-    return q == COL_MIN or q == COL_MAX or r == ROW_MIN or r == ROW_MAX
+    return is_valid(q, r) and (q == COL_MIN or q == COL_MAX or r == ROW_MIN or r == ROW_MAX)
 
 def bfs_escape_path(start_q, start_r, blocked_cells):
-    """Returns (distance, first_step) to escape."""
-    from collections import deque
+    """Returns (distance, first_step) to escape under current walls."""
     if is_escape(start_q, start_r):
         return 0, None
-    queue = deque([(start_q, start_r, 0, None)])  # (q, r, dist, first_step)
+    queue = deque([(start_q, start_r, 0, None)])
     visited = {(start_q, start_r)}
     while queue:
         q, r, dist, first = queue.popleft()
@@ -44,111 +73,16 @@ def bfs_escape_path(start_q, start_r, blocked_cells):
                     return dist + 1, new_first
                 visited.add((nq, nr))
                 queue.append((nq, nr, dist + 1, new_first))
-    return float('inf'), None
+    return float("inf"), None
 
 # ... (helper functions remain the same) ...
 
 class SpectraLogicEngine:
     """
-    Integrated Logic Engine using:
-    - ShadowProver: For theorem proving (trap validation, move constraints)
-    - Spectra: For planning (optimal wall placement)
+    The 'Spectra' Logic Engine.
+    Actually executes Spectra.jar to verify moves.
     """
     
-    @staticmethod
-    def _run_shadowprover(pig_pos, walls, proposed_move):
-        """
-        Uses ShadowProver to verify move constraints.
-        Checks: Is this move valid according to game rules?
-        """
-        import subprocess
-        
-        pq, pr = pig_pos['q'], pig_pos['r']
-        mq, mr = proposed_move
-        wall_set = set((w['q'], w['r']) for w in walls)
-        
-        # Build assumptions
-        assumptions = []
-        
-        # Pig position
-        p_name = f"C_{pq}_{pr}".replace("-", "m")
-        assumptions.append(f"(OccupiedByPig {p_name})")
-        
-        # Existing walls
-        for w in walls:
-            w_name = f"C_{w['q']}_{w['r']}".replace("-", "m")
-            assumptions.append(f"(HasWall {w_name})")
-        
-        # Move target
-        m_name = f"C_{mq}_{mr}".replace("-", "m")
-        
-        # Rule: Cannot place wall on pig
-        assumptions.append("(forall (c) (if (OccupiedByPig c) (not (CanPlaceWall c))))")
-        # Rule: Cannot place wall on existing wall
-        assumptions.append("(forall (c) (if (HasWall c) (not (CanPlaceWall c))))")
-        # Rule: Free cells can have walls placed
-        assumptions.append("(forall (c) (if (and (not (OccupiedByPig c)) (not (HasWall c))) (CanPlaceWall c)))")
-        
-        # Build problem file
-        lines = ['{:name "Move Constraint Check"']
-        lines.append(' :description "ShadowProver verifying move validity"')
-        lines.append(' :assumptions {')
-        for i, asm in enumerate(assumptions):
-            lines.append(f'  A{i} {asm}')
-        lines.append(' }')
-        lines.append(f' :goal (CanPlaceWall {m_name})')
-        lines.append('}')
-        
-        problem_content = '\n'.join(lines)
-        
-        # Use absolute paths
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        problem_file = os.path.join(project_root, "shadowprover_verify.clj")
-        
-        with open(problem_file, 'w') as f:
-            f.write(problem_content)
-        
-        jar_path = os.path.join(project_root, "tools", "Shadow-Prover.jar")
-        if not os.path.exists(jar_path):
-            return {'valid': True, 'reason': "ShadowProver Missing", 'output': None}
-        
-        try:
-            import time
-            # Use Popen so we can start and terminate ShadowProver
-            # Optimization: Add -XX:TieredStopAtLevel=1 to speed up JVM startup
-            process = subprocess.Popen(
-                ["java", "-XX:TieredStopAtLevel=1", "-jar", jar_path, problem_file],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                cwd=project_root, text=True
-            )
-            
-            # Wait briefly for it to start processing
-            time.sleep(1.0) # Reduced from 1.5s due to faster startup
-            
-            # Read any available output
-            try:
-                stdout, stderr = process.communicate(timeout=0.5)
-                output = stdout + stderr
-            except subprocess.TimeoutExpired:
-                # Still running (server mode) - terminate it
-                process.terminate()
-                try:
-                    stdout, stderr = process.communicate(timeout=1.0)
-                    output = stdout + stderr
-                except:
-                    process.kill()
-                    output = "ShadowProver started (server mode)"
-            
-            # Check output
-            if "Theorem Proved" in output or "Valid" in output:
-                return {'valid': True, 'reason': "ShadowProver: PROVED", 'output': output[:100]}
-            elif "Starting" in output or "Gateway" in output:
-                return {'valid': True, 'reason': "ShadowProver: Executed", 'output': "Server started and processed problem"}
-            else:
-                return {'valid': True, 'reason': "ShadowProver: Ran", 'output': output[:50] if output else "Processed"}
-                
-        except Exception as e:
-            return {'valid': True, 'reason': f"ShadowProver: {str(e)[:20]}", 'output': None}
     @staticmethod
     def _run_spectra(pig_pos, walls, proposed_move):
         """
@@ -240,10 +174,9 @@ class SpectraLogicEngine:
             return {'valid': True, 'reason': "Spectra JAR Missing (Fallback)", 'plan': None}
         
         try:
-            # Optimization: Add -XX:TieredStopAtLevel=1 for faster startup
             result = subprocess.run(
-                ["java", "-XX:TieredStopAtLevel=1", "-jar", jar_path, problem_file],
-                capture_output=True, text=True, timeout=12.0,  # Spectra needs ~10-11s
+                ["java", "-jar", jar_path, problem_file],
+                capture_output=True, text=True, timeout=15.0,  # Spectra needs ~11s
                 cwd=project_root
             )
             
@@ -289,29 +222,14 @@ class SpectraLogicEngine:
         if not progress_ok:
             return False, proof_log
 
-        # External verification (only for final move)
+        # External Spectra verification (only for final move)
         if use_external:
-            import concurrent.futures
-            
-            # Convert wall_set to list of dicts for external tools
+            # Convert wall_set to list of dicts for _run_spectra
             walls_list = [{'q': w[0], 'r': w[1]} for w in wall_set]
-            
-            # Run tools in parallel to save time
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                # Schedule both tasks
-                future_sp = executor.submit(SpectraLogicEngine._run_shadowprover, pig_pos, walls_list, move)
-                future_spectra = executor.submit(SpectraLogicEngine._run_spectra, pig_pos, walls_list, move)
-                
-                # Wait for results
-                res_sp = future_sp.result()
-                res_spectra = future_spectra.result()
-            
-            # Log results
-            proof_log.insert(0, f"ShadowProver: {res_sp['reason']}")
-            proof_log.insert(1, f"Spectra: {res_spectra['reason']}")
-            
-            if res_spectra.get('plan'):
-                proof_log.insert(2, f"Plan: {res_spectra['plan'][:40]}...")
+            res_ext = SpectraLogicEngine._run_spectra(pig_pos, walls_list, move)
+            proof_log.insert(0, f"Spectra: {res_ext['reason']}")
+            if res_ext.get('plan'):
+                proof_log.insert(1, f"Plan: {res_ext['plan'][:50]}...")
 
         return True, proof_log
 
@@ -371,103 +289,115 @@ def find_optimal_block(pig_pos, walls):
             return minimax(pig_best[0], pig_best[1], blocked, depth + 1, alpha, beta, True, max_depth)
 
     thoughts = []
-    
-    # 1. Candidate Generation (Heuristic Phase)
-    # Get neighbors + 2-step neighbors for opening moves
-    candidates = set()
-    for nq, nr in get_neighbors(pq, pr):
-        if is_valid(nq, nr) and (nq, nr) not in wall_set:
-            candidates.add((nq, nr))
-            for nnq, nnr in get_neighbors(nq, nr):
-                if is_valid(nnq, nnr) and (nnq, nnr) not in wall_set and (nnq, nnr) != (pq, pr):
-                    candidates.add((nnq, nnr))
-    
-    candidate_list = list(candidates)
-    if not candidate_list:
-        thoughts.append("No valid moves available.")
-        return None, thoughts
+    thoughts.append("[SPECTRA] One-step planning mode: try candidate goal cells until Spectra returns a non-empty plan.")
 
-    # 2. Score Candidates (Deep Search Phase)
-    scored_moves = []
-    start_time = time.time()
-    max_depth = 12 
-    
-    # Quick pre-sort by proximity to escape path
-    _, pig_next = bfs_escape_path(pq, pr, wall_set)
-    if pig_next:
-        candidate_list.sort(key=lambda m: 0 if m == pig_next else 1)
+    key = board_cache_key(pig_pos, walls)
+    if key in SPECTRA_CACHE:
+        cached = SPECTRA_CACHE[key]
+        thoughts.append("[SPECTRA] Cache hit: returning previously computed move.")
+        return cached, thoughts
 
-    for depth_limit in range(2, max_depth + 1, 2):
-        if time.time() - start_time > 1.5: break # Time check
-        
-        current_best_score = -float('inf')
-        # Only check top few candidates deep
-        check_list = candidate_list if depth_limit == 2 else [m for s, m in scored_moves[:5]]
-        scored_moves = []
-        
-        for move in check_list:
-            score = minimax(pq, pr, wall_set | {move}, 1, -float('inf'), float('inf'), False, depth_limit)
-            scored_moves.append((score, move))
-        
-        scored_moves.sort(key=lambda x: x[0], reverse=True)
-        if scored_moves[0][0] >= 900: break # Automatic win
+    wall_cells_logic = {ui_to_cell(w["q"], w["r"]) for w in walls}
 
-    # 3. Logical Verification (Spectra Phase)
-    top_candidates = scored_moves[:3]
-    best_verified_move = None
-    best_verification_log = []
-    
-    thoughts.append(f"Minimax identified {len(top_candidates)} candidates. Running fast logic filter...")
-    
-    for score, move in top_candidates:
-        q, r = move
-        
-        # Fast Python validation (no external JAR)
-        is_valid_logic, logs = SpectraLogicEngine.validate_move(pig_pos, wall_set, move, use_external=False)
-        
-        if is_valid_logic:
-            best_verified_move = move
-            best_verification_log = logs
-            thoughts.append(f"Candidate ({q},{r}) | Score: {score} | Logic: PASSED")
-            break
-        else:
-            thoughts.append(f"Candidate ({q},{r}) | Score: {score} | Logic: REJECTED")
-    
-    # Fallback
-    if not best_verified_move and scored_moves:
-        best_verified_move = scored_moves[0][1]
-        thoughts.append("Warning: All candidates failed logic. Using Minimax best.")
-        
-    final_move = best_verified_move
-    
-    # 4. External Spectra Certification (JAR call - ONCE for final move)
-    if final_move:
-        thoughts.append(f"Decision: Wall at ({final_move[0]}, {final_move[1]}). Certifying with Spectra JAR...")
-        _, external_logs = SpectraLogicEngine.validate_move(pig_pos, wall_set, final_move, use_external=True)
-        thoughts.extend([f"  [Spectra] {l}" for l in external_logs])
-        
-    return {'q': final_move[0], 'r': final_move[1]}, thoughts
+    tried = 0
+    start_t = time.time()
 
+    for (cq, cr) in candidate_goal_cells_ui(pig_pos, walls):
+        goal_cell = ui_to_cell(cq, cr)
+        if goal_cell in wall_cells_logic:
+            continue
 
-@app.route('/api/move', methods=['POST'])
-def get_move():
-    data = request.json
-    pig_pos = data.get('pig_pos', {'q': 0, 'r': 0})
-    walls = data.get('walls', [])
-    
+        tried += 1
+        tmp_path = None
+        try:
+            tmp_path = write_temp_clj(pig_pos, walls, goal_cell)
+            out = run_spectra(tmp_path, timeout_s=SPECTRA_TIMEOUT_SECONDS)
+
+            plan = parse_first_bracket_list(out)
+            if not plan:
+                tag = key[:8] + f"_{tried}"
+                dbg = save_debug(tag, out)
+                thoughts.append(f"[SPECTRA] Candidate {goal_cell}: no bracket plan found. Saved: {dbg}")
+                continue
+
+            if plan.strip() == "[]":
+                thoughts.append(f"[SPECTRA] Candidate {goal_cell}: plan was empty [] (goal already true or unreachable).")
+                continue
+
+            cell = extract_placewall_cell(plan)
+            if not cell:
+                tag = key[:8] + f"_{tried}"
+                dbg = save_debug(tag, out)
+                thoughts.append(f"[SPECTRA] Candidate {goal_cell}: couldn't parse PlaceWall cell. Saved: {dbg}")
+                thoughts.append(f"[SPECTRA] Plan text: {plan}")
+                continue
+
+            move = cell_to_ui(cell)
+            elapsed = time.time() - start_t
+
+            thoughts.append(f"[SPECTRA] SUCCESS after {tried} candidates in {elapsed:.2f}s")
+            thoughts.append(f"[SPECTRA] Plan: {plan}")
+            thoughts.append(f"[SPECTRA] Move: PlaceWall {cell} -> UI=({move['q']},{move['r']})")
+
+            SPECTRA_CACHE[key] = move
+            return move, thoughts
+
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+    raise RuntimeError("Spectra did not return a usable PlaceWall plan for any candidate goal cell.")
+
+# =========================
+# Fallback move
+# =========================
+def fallback_move(pig_pos, walls):
+    pq, pr = pig_pos["q"], pig_pos["r"]
+    wall_set = {(w["q"], w["r"]) for w in walls}
+
     thoughts = []
-    thoughts.append(f"Analyzing board with strategic AI...")
-    thoughts.append(f"Pig position: ({pig_pos['q']}, {pig_pos['r']})")
-    
-    # Find optimal blocking move using strategic analysis
-    optimal_move, analysis_thoughts = find_optimal_block(pig_pos, walls)
-    thoughts.extend(analysis_thoughts)
-    
-    if not optimal_move:
-        return jsonify({'error': 'No valid moves', 'thoughts': thoughts}), 500
-    
-    return jsonify({'move': optimal_move, 'thoughts': thoughts})
+    dist, next_step = bfs_escape_path(pq, pr, wall_set)
+    thoughts.append(f"[FALLBACK] Current escape distance: {dist if dist != float('inf') else 'trapped'}")
 
+    if next_step and next_step not in wall_set:
+        thoughts.append(f"[FALLBACK] Blocking next-step cell: {next_step}")
+        return {"q": next_step[0], "r": next_step[1]}, thoughts
 
-if __name__ == '__main__':
+    for nq, nr in get_neighbors(pq, pr):
+        if is_valid(nq, nr) and (nq, nr) not in wall_set and (nq, nr) != (pq, pr):
+            thoughts.append(f"[FALLBACK] Blocking neighbor: {(nq, nr)}")
+            return {"q": nq, "r": nr}, thoughts
+
+    return None, thoughts
+
+# =========================
+# API
+# =========================
+@app.route("/api/move", methods=["POST"])
+def get_move():
+    data = request.json or {}
+    pig_pos = data.get("pig_pos", {"q": UI_CENTER_Q, "r": UI_CENTER_R})
+    walls = data.get("walls", [])
+
+    thoughts = ["Decision engine: Spectra planner (fallback = minimax)."]
+
+    try:
+        move, t = spectra_move(pig_pos, walls)
+        thoughts.extend(t)
+        return jsonify({"move": move, "thoughts": thoughts})
+
+    except subprocess.TimeoutExpired:
+        thoughts.append(f"[SPECTRA] Timed out after {SPECTRA_TIMEOUT_SECONDS}s.")
+    except Exception as e:
+        thoughts.append(f"[SPECTRA] Failed: {e}")
+
+    move, t = fallback_move(pig_pos, walls)
+    thoughts.extend(t)
+    thoughts.append("[FALLBACK] Returned heuristic move (Spectra unavailable).")
+    return jsonify({"move": move, "thoughts": thoughts})
+
+if __name__ == "__main__":
     app.run(debug=True)
