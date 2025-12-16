@@ -1,24 +1,29 @@
-{:name       "Block the Pig"
+{:name "Block the Pig - Reachability"
  :background [
-    (AdjacentToPig C_2_5)
-    (AdjacentToPig C_1_4)
-    (AdjacentToPig C_0_5)
-    (AdjacentToPig C_1_6)
-    (AdjacentToPig C_2_6)
+    (Adjacent C_0_7 C_1_6)
+    (Adjacent C_0_7 C_0_6)
+    (Adjacent C_1_6 C_0_6)
+    (Adjacent C_1_6 C_0_7)
+    (Adjacent C_0_6 C_1_6)
+    (Adjacent C_0_6 C_0_7)
+    (Escape C_0_7)
+    (Escape C_0_6)
+    (PigAt C_1_6)
+    (forall (?c) (if (PigAt ?c) (Reachable ?c)))
+    (forall (?c1 ?c2) (if (and (Reachable ?c1) (Adjacent ?c1 ?c2) (Free ?c2)) (Reachable ?c2)))
  ]
- :actions    [
+ :actions [
     (define-action PlaceWall [?c] {
-        :preconditions [(Free ?c) (AdjacentToPig ?c)]
+        :preconditions [(Free ?c)]
         :additions     [(Blocked ?c)]
         :deletions     [(Free ?c)]
     })
  ]
- :start      [
-    (Free C_2_5)
-    (Free C_1_4)
-    (Free C_0_5)
-    (Free C_1_6)
-    (Free C_2_6)
+ :start [
+    (Free C_0_7)
+    (Free C_0_6)
  ]
- :goal       [(exists (?x) (Blocked ?x))]
+ :goal [
+    (not (exists (?e) (and (Escape ?e) (Reachable ?e))))
+ ]
 }

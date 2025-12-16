@@ -502,7 +502,7 @@ aiMoveBtn.addEventListener('click', async () => {
         console.error(err);
         alert("Error connecting to AI server.");
     } finally {
-        aiMoveBtn.innerHTML = '<span class="icon">✨</span> Ask AI for Best Move';
+        aiMoveBtn.innerHTML = 'Ask AI for Best Move';
         aiMoveBtn.disabled = false;
     }
 });
@@ -598,7 +598,7 @@ function startAutoPlay() {
         resetGame();
     }
     isAutoPlaying = true;
-    autoCompleteBtn.innerHTML = '<span class="icon">⏹️</span> Stop Auto Play';
+    autoCompleteBtn.innerHTML = 'Stop Auto Play';
     autoCompleteBtn.classList.add('active');
     aiMoveBtn.disabled = true;
     resetBtn.disabled = true;
@@ -607,7 +607,7 @@ function startAutoPlay() {
 
 function stopAutoPlay() {
     isAutoPlaying = false;
-    autoCompleteBtn.innerHTML = '<span class="icon">🤖</span> Auto Complete Game';
+    autoCompleteBtn.innerHTML = 'Auto Complete Game';
     autoCompleteBtn.classList.remove('active');
     aiMoveBtn.disabled = false;
     resetBtn.disabled = false;

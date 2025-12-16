@@ -1,0 +1,108 @@
+﻿
+============================================================
+TEST: Pig in center, no walls
+============================================================
+Pig at (2, 5), current escape distance: 2
+
+Top 5 moves (by score after pig responds):
+  Block (0, 5) -> pig moves to (3, 5) -> escape_dist: 1 <-- BEST
+  Block (1, 3) -> pig moves to (3, 5) -> escape_dist: 1
+  Block (1, 4) -> pig moves to (3, 5) -> escape_dist: 1
+  Block (1, 5) -> pig moves to (3, 5) -> escape_dist: 1
+  Block (1, 6) -> pig moves to (3, 5) -> escape_dist: 1
+
+  Grid:
+  r= 0:  .  .  .  .  . 
+  r= 1:    .  o  o  o  . 
+  r= 2:  .  o  o  o  . 
+  r= 3:    .  o  o  o  . 
+  r= 4:  .  o  o  o  . 
+  r= 5:    X  o  P  o  . 
+  r= 6:  .  o  o  o  . 
+  r= 7:    .  o  o  o  . 
+  r= 8:  .  o  o  o  . 
+  r= 9:    .  o  o  o  . 
+  r=10:  .  .  .  .  . 
+
+SUGGESTED: Block (0, 5)
+
+============================================================
+TEST: Pig moved left
+============================================================
+Pig at (1, 5), current escape distance: 1
+
+Top 5 moves (by score after pig responds):
+  Block (0, 5) -> pig moves to (1, 4) -> escape_dist: 1 <-- BEST
+  Block (0, 3) -> pig moves to (0, 5) -> escape_dist: ESCAPE!
+  Block (0, 4) -> pig moves to (0, 5) -> escape_dist: ESCAPE!
+  Block (0, 6) -> pig moves to (0, 5) -> escape_dist: ESCAPE!
+  Block (0, 7) -> pig moves to (0, 5) -> escape_dist: ESCAPE!
+
+  Grid:
+  r= 0:  .  .  .  .  . 
+  r= 1:    .  o  o  o  . 
+  r= 2:  .  o  o  o  . 
+  r= 3:    .  o  o  o  . 
+  r= 4:  .  o  o  o  . 
+  r= 5:    X  P  o  o  . 
+  r= 6:  .  o  o  o  . 
+  r= 7:    .  o  o  o  . 
+  r= 8:  .  o  o  o  . 
+  r= 9:    .  o  o  o  . 
+  r=10:  .  .  .  .  . 
+
+SUGGESTED: Block (0, 5)
+
+============================================================
+TEST: Pig near corner
+============================================================
+Pig at (1, 1), current escape distance: 1
+
+Top 5 moves (by score after pig responds):
+  Block (0, 0) -> pig moves to (2, 0) -> escape_dist: ESCAPE! <-- BEST
+  Block (0, 1) -> pig moves to (2, 0) -> escape_dist: ESCAPE!
+  Block (0, 2) -> pig moves to (2, 0) -> escape_dist: ESCAPE!
+  Block (0, 3) -> pig moves to (2, 0) -> escape_dist: ESCAPE!
+  Block (1, 0) -> pig moves to (2, 0) -> escape_dist: ESCAPE!
+
+  Grid:
+  r= 0:  X  .  .  .  . 
+  r= 1:    .  P  o  o  . 
+  r= 2:  .  o  o  o  . 
+  r= 3:    .  o  o  o  . 
+  r= 4:  .  o  o  o  . 
+  r= 5:    .  o  o  o  . 
+  r= 6:  .  o  o  o  . 
+  r= 7:    .  o  o  o  . 
+  r= 8:  .  o  o  o  . 
+  r= 9:    .  o  o  o  . 
+  r=10:  .  .  .  .  . 
+
+SUGGESTED: Block (0, 0)
+
+============================================================
+TEST: Pig with some walls
+============================================================
+Pig at (2, 5), current escape distance: 2
+
+Top 5 moves (by score after pig responds):
+  Block (0, 5) -> pig moves to (3, 5) -> escape_dist: 1 <-- BEST
+  Block (1, 3) -> pig moves to (3, 5) -> escape_dist: 1
+  Block (1, 5) -> pig moves to (3, 5) -> escape_dist: 1
+  Block (1, 6) -> pig moves to (3, 5) -> escape_dist: 1
+  Block (1, 7) -> pig moves to (3, 5) -> escape_dist: 1
+
+  Grid:
+  r= 0:  .  .  .  .  . 
+  r= 1:    .  o  o  o  . 
+  r= 2:  .  o  o  o  . 
+  r= 3:    .  o  o  o  . 
+  r= 4:  .  #  o  o  . 
+  r= 5:    X  o  P  o  . 
+  r= 6:  .  o  o  #  . 
+  r= 7:    .  o  o  o  . 
+  r= 8:  .  o  o  o  . 
+  r= 9:    .  o  o  o  . 
+  r=10:  .  .  .  .  . 
+
+SUGGESTED: Block (0, 5)

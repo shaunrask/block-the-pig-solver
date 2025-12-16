@@ -6,7 +6,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Block the Pig - AI Solver</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
 </head>
 
 <body>
@@ -17,35 +16,29 @@
 
         <div class="sidebar">
             <header>
-                <h1>Block the Pig <span class="ai-badge">Using Logic AI</span></h1>
-                <p>Trap the pig before it escapes!</p>
+                <h1>Block the Pig</h1>
+                <p>Strategic AI using Spectra logic solver</p>
             </header>
 
-            <div class="controls">
-                <div class="status-panel">
-                    <div class="status-item">
-                        <span class="label">Turn</span>
-                        <span id="turnIndicator" class="value player-turn">Your Turn</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="label">Walls</span>
-                        <span id="wallCount" class="value">0</span>
-                    </div>
+            <div class="status-panel">
+                <div class="status-item">
+                    <span class="label">Turn</span>
+                    <span id="turnIndicator" class="value player-turn">Your Turn</span>
                 </div>
+                <div class="status-item">
+                    <span class="label">Walls</span>
+                    <span id="wallCount" class="value">0</span>
+                </div>
+            </div>
 
-                <button id="aiMoveBtn" class="btn primary-btn">
-                    <span class="icon">✨</span> Ask AI for Best Move
-                </button>
-                <button id="autoCompleteBtn" class="btn secondary-btn auto-btn">
-                    <span class="icon">🤖</span> Auto Complete Game
-                </button>
-                <button id="resetBtn" class="btn secondary-btn">Reset Game</button>
+            <button id="aiMoveBtn" class="btn primary-btn">Ask AI for Best Move</button>
+            <button id="autoCompleteBtn" class="btn auto-btn">Auto Complete Game</button>
+            <button id="resetBtn" class="btn">Reset Game</button>
 
-                <div class="thought-section">
-                    <h3>AI Thoughts</h3>
-                    <div id="thoughtLog" class="thought-log">
-                        <p class="placeholder">Click "Ask AI" to see the AI's reasoning...</p>
-                    </div>
+            <div class="thought-section">
+                <h3>AI Reasoning</h3>
+                <div id="thoughtLog" class="thought-log">
+                    <p class="placeholder">Click "Ask AI" to see reasoning...</p>
                 </div>
             </div>
         </div>

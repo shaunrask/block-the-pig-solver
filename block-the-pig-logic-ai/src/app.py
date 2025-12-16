@@ -1,5 +1,3 @@
-import os
-import re
 from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
@@ -8,127 +6,27 @@ app = Flask(__name__)
 COL_MIN, COL_MAX = 0, 4
 ROW_MIN, ROW_MAX = 0, 10
 
-# Py4J Gateway - connects to Spectra server (much faster than subprocess)
-gateway = None
-
-def get_gateway():
-    """Get or create Py4J gateway to Spectra server."""
-    global gateway
-    if gateway is None:
-        try:
-            from py4j.java_gateway import JavaGateway
-            gateway = JavaGateway()
-            print("Connected to Spectra Py4J server")
-        except Exception as e:
-            print(f"Warning: Could not connect to Py4J server: {e}")
-            return None
-    return gateway
-
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/api/move', methods=['POST'])
-def get_move():
-    data = request.json
-    pig_pos = data.get('pig_pos', {'q': 0, 'r': 0})
-    walls = data.get('walls', [])
-    
-    thoughts = []
-    thoughts.append(f"Analyzing board state with Spectra AI...")
-    thoughts.append(f"Pig position: ({pig_pos['q']}, {pig_pos['r']})")
-    thoughts.append(f"Wall count: {len(walls)}")
-    
-    # Generate Spectra problem
-    problem_content = generate_spectra_problem(pig_pos, walls)
-    
-    if not problem_content:
-        thoughts.append("No valid moves available.")
-        return jsonify({'error': 'No valid moves', 'thoughts': thoughts}), 500
-    
-    # Save problem for debugging
-    problem_path = os.path.join(os.path.dirname(__file__), '..', 'spectra', 'current_problem.clj')
-    with open(problem_path, 'w') as f:
-        f.write(problem_content)
-    
-    thoughts.append("Calling Spectra via Py4J (fast mode)...")
-    
-    try:
-        gw = get_gateway()
-        if gw:
-            # Use Py4J - FAST (JVM already running)
-            result = gw.entry_point.proveFromDescription(problem_content)
-            print(f"Spectra Py4J Output: {result}")
-            
-            # Parse output
-            match = re.search(r'\(PlaceWall\s+C_(\d+)_(\d+)\)', str(result), re.IGNORECASE)
-            if match:
-                q = int(match.group(1))
-                r = int(match.group(2))
-                
-                thoughts.append(f"Spectra found move: ({q}, {r})")
-                thoughts.append("Executed via Py4J (< 1 second).")
-                
-                return jsonify({'move': {'q': q, 'r': r}, 'thoughts': thoughts})
-            else:
-                thoughts.append("Spectra: No plan found.")
-                return jsonify({'error': 'No plan found', 'thoughts': thoughts}), 500
-        else:
-            # Fallback to subprocess (slow)
-            thoughts.append("Py4J not available, using subprocess (slower)...")
-            return run_spectra_subprocess(problem_content, problem_path, thoughts)
-            
-    except Exception as e:
-        print(f"Spectra Error: {e}")
-        thoughts.append(f"Error: {str(e)}")
-        # Fallback to subprocess
-        return run_spectra_subprocess(problem_content, problem_path, thoughts)
 
-
-def run_spectra_subprocess(problem_content, problem_path, thoughts):
-    """Fallback: run Spectra via subprocess (slow, ~10s)."""
-    import subprocess
-    
-    TOOLS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'tools'))
-    SPECTRA_JAR = os.path.join(TOOLS_DIR, 'Spectra.jar')
-    
-    try:
-        cmd = ['java', '-jar', SPECTRA_JAR, problem_path]
-        result = subprocess.run(cmd, capture_output=True, text=True, 
-                                cwd=os.path.join(os.path.dirname(__file__), '..'),
-                                timeout=60)
-        
-        output = result.stdout
-        print(f"Spectra Output: {output}")
-        
-        match = re.search(r'\(PlaceWall\s+C_(\d+)_(\d+)\)', output, re.IGNORECASE)
-        if match:
-            q = int(match.group(1))
-            r = int(match.group(2))
-            
-            thoughts.append(f"Spectra found move: ({q}, {r})")
-            thoughts.append("(subprocess mode - slower)")
-            
-            return jsonify({'move': {'q': q, 'r': r}, 'thoughts': thoughts})
-        else:
-            thoughts.append("Spectra: No plan found.")
-            return jsonify({'error': 'No plan found', 'thoughts': thoughts}), 500
-            
-    except Exception as e:
-        thoughts.append(f"Subprocess error: {str(e)}")
-        return jsonify({'error': str(e), 'thoughts': thoughts}), 500
-
-
-def generate_spectra_problem(pig_pos, walls):
+def find_optimal_block(pig_pos, walls):
     """
-    Generate a Spectra planning problem.
-    Spectra will find a valid PlaceWall action adjacent to the pig.
+    Find the optimal cell to block using 2-ply minimax:
+    1. We place a wall
+    2. Pig makes its best move (toward escape)
+    3. Evaluate the resulting escape distance
+    
+    The best wall is one that maximizes escape distance AFTER pig responds.
+    
+    Returns:
+        (best_move_dict, thoughts_list)
     """
+    from collections import deque
+    
     pq, pr = pig_pos['q'], pig_pos['r']
     wall_set = set((w['q'], w['r']) for w in walls)
-    
-    def cell_name(q, r):
-        return f"C_{q}_{r}"
     
     def get_neighbors(q, r):
         if r % 2 == 0:
@@ -139,48 +37,161 @@ def generate_spectra_problem(pig_pos, walls):
     def is_valid(q, r):
         return COL_MIN <= q <= COL_MAX and ROW_MIN <= r <= ROW_MAX
     
-    # Find free cells adjacent to pig
-    free_adjacent = []
-    for nq, nr in get_neighbors(pq, pr):
-        if is_valid(nq, nr) and (nq, nr) not in wall_set and (nq, nr) != (pq, pr):
-            free_adjacent.append((nq, nr))
+    def is_escape(q, r):
+        if not is_valid(q, r): return False
+        return q == COL_MIN or q == COL_MAX or r == ROW_MIN or r == ROW_MAX
     
-    if not free_adjacent:
-        return None
+    def bfs_escape_distance(start_q, start_r, blocked_cells):
+        """BFS to find minimum distance from a position to any escape cell."""
+        if is_escape(start_q, start_r):
+            return 0
+            
+        queue = deque([(start_q, start_r, 0)])
+        visited = {(start_q, start_r)}
+        
+        while queue:
+            q, r, dist = queue.popleft()
+            
+            for nq, nr in get_neighbors(q, r):
+                if is_valid(nq, nr) and (nq, nr) not in visited and (nq, nr) not in blocked_cells:
+                    if is_escape(nq, nr):
+                        return dist + 1
+                    visited.add((nq, nr))
+                    queue.append((nq, nr, dist + 1))
+        
+        return float('inf')
     
-    # Build Spectra problem
-    output = []
-    output.append('{:name       "Block the Pig"')
-    output.append(' :background [')
+    def get_pig_best_move(pig_q, pig_r, blocked_cells):
+        """Get the pig's best move (first step on shortest path to escape)."""
+        if is_escape(pig_q, pig_r):
+            return (pig_q, pig_r)  # Already escaped
+        
+        # BFS to find path
+        queue = deque([(pig_q, pig_r, [])])
+        visited = {(pig_q, pig_r)}
+        
+        while queue:
+            q, r, path = queue.popleft()
+            
+            if is_escape(q, r):
+                if path:
+                    return path[0]  # First step
+                return (q, r)
+            
+            for nq, nr in get_neighbors(q, r):
+                if is_valid(nq, nr) and (nq, nr) not in visited and (nq, nr) not in blocked_cells:
+                    visited.add((nq, nr))
+                    queue.append((nq, nr, path + [(nq, nr)]))
+        
+        return None  # Trapped
     
-    # Mark cells adjacent to pig
+    thoughts = []
+    
+    # Current escape distance without any new wall
+    current_distance = bfs_escape_distance(pq, pr, wall_set)
+    thoughts.append(f"Current escape distance: {current_distance if current_distance != float('inf') else 'trapped'}")
+    
+    if current_distance == float('inf'):
+        thoughts.append("Pig is already trapped!")
+        return None, thoughts
+    
+    if current_distance == 0:
+        thoughts.append("Pig is already at an escape - too late to block!")
+        return None, thoughts
+    
+    # Get candidate cells: neighbors of pig + cells within 2 steps
+    candidates = set()
+    
     for nq, nr in get_neighbors(pq, pr):
         if is_valid(nq, nr) and (nq, nr) not in wall_set:
-            output.append(f'    (AdjacentToPig {cell_name(nq, nr)})')
+            candidates.add((nq, nr))
     
-    output.append(' ]')
+    for nq, nr in list(candidates):
+        for nnq, nnr in get_neighbors(nq, nr):
+            if is_valid(nnq, nnr) and (nnq, nnr) not in wall_set and (nnq, nnr) != (pq, pr):
+                candidates.add((nnq, nnr))
     
-    # PlaceWall action with strategic constraint
-    output.append(' :actions    [')
-    output.append('    (define-action PlaceWall [?c] {')
-    output.append('        :preconditions [(Free ?c) (AdjacentToPig ?c)]')
-    output.append('        :additions     [(Blocked ?c)]')
-    output.append('        :deletions     [(Free ?c)]')
-    output.append('    })')
-    output.append(' ]')
+    thoughts.append(f"Evaluating {len(candidates)} moves with lookahead...")
     
-    # Start: Mark free cells
-    output.append(' :start      [')
-    for q, r in free_adjacent:
-        output.append(f'    (Free {cell_name(q, r)})')
-    output.append(' ]')
+    # Evaluate each candidate with 2-ply minimax
+    best_cell = None
+    best_score = -float('inf')
     
-    # Goal: Block any adjacent cell
-    output.append(' :goal       [(exists (?x) (Blocked ?x))]')
-    output.append('}')
+    for cell in candidates:
+        # Step 1: Place wall
+        test_walls = wall_set | {cell}
+        
+        # Check if this immediately traps the pig
+        dist_after_wall = bfs_escape_distance(pq, pr, test_walls)
+        if dist_after_wall == float('inf'):
+            # Winning move!
+            thoughts.append(f"Found winning move at ({cell[0]}, {cell[1]}) - traps the pig!")
+            return {'q': cell[0], 'r': cell[1]}, thoughts
+        
+        # Step 2: Simulate pig's response (pig moves toward escape)
+        pig_move = get_pig_best_move(pq, pr, test_walls)
+        
+        if pig_move is None:
+            # Pig would be trapped after our wall
+            thoughts.append(f"Found winning move at ({cell[0]}, {cell[1]}) - traps the pig!")
+            return {'q': cell[0], 'r': cell[1]}, thoughts
+        
+        # Step 3: Evaluate position after pig moves
+        new_pig_q, new_pig_r = pig_move
+        
+        # Check if pig escapes
+        if is_escape(new_pig_q, new_pig_r):
+            # This wall placement lets pig escape - bad!
+            score = -100
+        else:
+            # Score = escape distance from pig's new position
+            score = bfs_escape_distance(new_pig_q, new_pig_r, test_walls)
+            if score == float('inf'):
+                score = 100  # Trapped = very good
+        
+        if score > best_score:
+            best_score = score
+            best_cell = cell
     
-    return "\n".join(output)
+    if best_cell:
+        if best_score == 100:
+            thoughts.append(f"Best block: ({best_cell[0]}, {best_cell[1]}) - forces trap after pig moves")
+        elif best_score > 0:
+            thoughts.append(f"Best block: ({best_cell[0]}, {best_cell[1]}) - escape distance after pig moves: {best_score}")
+        else:
+            thoughts.append(f"Best defensive block: ({best_cell[0]}, {best_cell[1]})")
+        return {'q': best_cell[0], 'r': best_cell[1]}, thoughts
+    
+    # Fallback: block first neighbor
+    for nq, nr in get_neighbors(pq, pr):
+        if is_valid(nq, nr) and (nq, nr) not in wall_set:
+            thoughts.append(f"Fallback: blocking neighbor ({nq}, {nr})")
+            return {'q': nq, 'r': nr}, thoughts
+    
+    thoughts.append("No valid moves available")
+    return None, thoughts
+
+
+@app.route('/api/move', methods=['POST'])
+def get_move():
+    data = request.json
+    pig_pos = data.get('pig_pos', {'q': 0, 'r': 0})
+    walls = data.get('walls', [])
+    
+    thoughts = []
+    thoughts.append(f"Analyzing board with strategic AI...")
+    thoughts.append(f"Pig position: ({pig_pos['q']}, {pig_pos['r']})")
+    
+    # Find optimal blocking move using strategic analysis
+    optimal_move, analysis_thoughts = find_optimal_block(pig_pos, walls)
+    thoughts.extend(analysis_thoughts)
+    
+    if not optimal_move:
+        return jsonify({'error': 'No valid moves', 'thoughts': thoughts}), 500
+    
+    return jsonify({'move': optimal_move, 'thoughts': thoughts})
 
 
 if __name__ == '__main__':
     app.run(debug=True)
+

@@ -1,0 +1,159 @@
+﻿
+############################################################
+# RUNNING ALL TESTS
+############################################################
+
+============================================================
+TEST 1: Pig in center (2,5), no walls
+============================================================
+
+  Grid (q: 0-4, r: 0-10):
+  r= 0:  .  .  .  .  . 
+  r= 1:    .  o  o  o  . 
+  r= 2:  .  o  o  o  . 
+  r= 3:    .  o  o  o  . 
+  r= 4:  .  o  o  o  . 
+  r= 5:    .  o  P  X  . 
+  r= 6:  .  o  o  o  . 
+  r= 7:    .  o  o  o  . 
+  r= 8:  .  o  o  o  . 
+  r= 9:    .  o  o  o  . 
+  r=10:  .  .  .  .  . 
+  Legend: P=pig, #=wall, X=suggested, .=escape, o=interior
+
+  Algorithm suggests: {'q': 3, 'r': 5} (new distance: 2)
+  TRUE optimal:       None (new distance: 2)
+  Γ£ô PASS - Same optimal distance
+
+============================================================
+TEST 2: Pig at (1,5), one step from left edge escape
+============================================================
+
+  Grid (q: 0-4, r: 0-10):
+  r= 0:  .  .  .  .  . 
+  r= 1:    .  o  o  o  . 
+  r= 2:  .  o  o  o  . 
+  r= 3:    .  o  o  o  . 
+  r= 4:  .  o  o  o  . 
+  r= 5:    X  P  o  o  . 
+  r= 6:  .  o  o  o  . 
+  r= 7:    .  o  o  o  . 
+  r= 8:  .  o  o  o  . 
+  r= 9:    .  o  o  o  . 
+  r=10:  .  .  .  .  . 
+  Legend: P=pig, #=wall, X=suggested, .=escape, o=interior
+
+  Current escape distance: 1
+  Algorithm suggests: {'q': 0, 'r': 5} (new distance: 2)
+  TRUE optimal:       {'q': 0, 'r': 5} (new distance: 2)
+  Γ£ô PASS - Correctly blocked escape direction
+
+============================================================
+TEST 3: Pig at (2,5) with walls creating funnel
+============================================================
+
+  Grid (q: 0-4, r: 0-10):
+  r= 0:  .  .  .  .  . 
+  r= 1:    .  o  o  o  . 
+  r= 2:  .  o  o  o  . 
+  r= 3:    .  o  o  o  . 
+  r= 4:  .  #  #  #  . 
+  r= 5:    .  #  P  X  . 
+  r= 6:  .  #  #  #  . 
+  r= 7:    .  o  o  o  . 
+  r= 8:  .  o  o  o  . 
+  r= 9:    .  o  o  o  . 
+  r=10:  .  .  .  .  . 
+  Legend: P=pig, #=wall, X=suggested, .=escape, o=interior
+
+  Algorithm suggests: {'q': 3, 'r': 5} (new distance: inf)
+  TRUE optimal:       {'q': 3, 'r': 5} (new distance: inf)
+  Γ£ô PASS - Same optimal distance
+
+============================================================
+TEST 4: Pig at (2,5) nearly trapped - one move to win
+============================================================
+
+  Grid (q: 0-4, r: 0-10):
+  r= 0:  .  .  .  .  . 
+  r= 1:    .  o  o  o  . 
+  r= 2:  .  o  o  o  . 
+  r= 3:    .  o  o  o  . 
+  r= 4:  .  o  #  #  . 
+  r= 5:    .  #  P  #  . 
+  r= 6:  .  #  #  X  . 
+  r= 7:    .  o  o  o  . 
+  r= 8:  .  o  o  o  . 
+  r= 9:    .  o  o  o  . 
+  r=10:  .  .  .  .  . 
+  Legend: P=pig, #=wall, X=suggested, .=escape, o=interior
+
+  Algorithm suggests: {'q': 3, 'r': 6} (new distance: inf)
+  TRUE optimal:       {'q': 3, 'r': 6} (new distance: inf)
+  Γ£ô PASS - Found winning (trapping) move!
+
+============================================================
+TEST 5: Pig at corner area (1,1)
+============================================================
+
+  Grid (q: 0-4, r: 0-10):
+  r= 0:  .  .  .  .  . 
+  r= 1:    .  P  X  o  . 
+  r= 2:  .  o  o  o  . 
+  r= 3:    .  o  o  o  . 
+  r= 4:  .  o  o  o  . 
+  r= 5:    .  o  o  o  . 
+  r= 6:  .  o  o  o  . 
+  r= 7:    .  o  o  o  . 
+  r= 8:  .  o  o  o  . 
+  r= 9:    .  o  o  o  . 
+  r=10:  .  .  .  .  . 
+  Legend: P=pig, #=wall, X=suggested, .=escape, o=interior
+
+  Algorithm suggests: {'q': 2, 'r': 1} (new distance: 1)
+  TRUE optimal:       None (new distance: 1)
+  Γ£ô PASS - Same optimal distance
+
+============================================================
+TEST 6: Chokepoint scenario
+============================================================
+
+  Grid (q: 0-4, r: 0-10):
+  r= 0:  .  .  .  .  . 
+  r= 1:    .  o  o  o  . 
+  r= 2:  .  o  o  o  . 
+  r= 3:    .  o  o  o  . 
+  r= 4:  .  #  o  #  . 
+  r= 5:    .  o  P  X  . 
+  r= 6:  .  #  o  #  . 
+  r= 7:    .  o  o  o  . 
+  r= 8:  .  o  o  o  . 
+  r= 9:    .  o  o  o  . 
+  r=10:  .  .  .  .  . 
+  Legend: P=pig, #=wall, X=suggested, .=escape, o=interior
+
+  Algorithm suggests: {'q': 3, 'r': 5} (new distance: 2)
+  TRUE optimal:       None (new distance: 2)
+  Γ£ô PASS - Same optimal distance
+
+============================================================
+TEST 7: Pig already at escape (0, 5)
+============================================================
+  Pig is ON an escape cell (left edge)
+  Algorithm returns: None
+  Γ£ô PASS - Correctly identified pig at escape
+
+============================================================
+SUMMARY
+============================================================
+  Γ£ô PASS: Test 1: Center pig
+  Γ£ô PASS: Test 2: One step from escape
+  Γ£ô PASS: Test 3: Funnel walls
+  Γ£ô PASS: Test 4: Nearly trapped
+  Γ£ô PASS: Test 5: Corner pig
+  Γ£ô PASS: Test 6: Chokepoint
+  Γ£ô PASS: Test 7: Pig at escape
+
+  Total: 7/7 tests passed
+
+  Γ£ô All tests passed!
