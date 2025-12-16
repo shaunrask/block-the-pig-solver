@@ -4,9 +4,7 @@ from collections import deque
 
 app = Flask(__name__)
 
-# =========================
 # UI board constants
-# =========================
 COL_MIN, COL_MAX = 0, 4
 ROW_MIN, ROW_MAX = 0, 10
 
@@ -14,9 +12,7 @@ ROW_MIN, ROW_MAX = 0, 10
 UI_CENTER_Q = 2
 UI_CENTER_R = 5
 
-# =========================
 # Spectra / Java config
-# =========================
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SPECTRA_DIR = os.path.join(PROJECT_ROOT, "spectra")
 TEMPLATE_CLJ = os.path.join(SPECTRA_DIR, "block_the_pig.clj")
@@ -35,16 +31,12 @@ SPECTRA_CACHE = {}
 DEBUG_DIR = os.path.join(PROJECT_ROOT, "spectra_debug")
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
-# =========================
 # Routes
-# =========================
 @app.route("/")
 def index():
     return render_template("index.html")
 
-# =========================
 # UI helpers
-# =========================
 def get_neighbors(q, r):
     # MUST match game.js odd-row rules
     if r % 2 == 0:
@@ -75,11 +67,8 @@ def bfs_escape_path(start_q, start_r, blocked_cells):
                 queue.append((nq, nr, dist + 1, new_first))
     return float("inf"), None
 
-# =========================
 # Logic cell naming
 # We map UI (q,r) to C_dq_dr relative to UI center (2,5)
-# Example: UI (2,5) -> C_0_0
-# =========================
 def _enc(n: int) -> str:
     return f"m{abs(n)}" if n < 0 else str(n)
 
@@ -111,9 +100,7 @@ def all_ui_cells():
         for r in range(ROW_MIN, ROW_MAX + 1):
             yield q, r
 
-# =========================
 # Spectra file generation
-# =========================
 def build_start_block(pig_pos: dict, walls: list) -> str:
     pig_cell = ui_to_cell(pig_pos["q"], pig_pos["r"])
     wall_cells = {ui_to_cell(w["q"], w["r"]) for w in walls}
@@ -188,9 +175,7 @@ def save_debug(tag: str, out: str) -> str:
         f.write(out)
     return path
 
-# =========================
 # Plan parsing
-# =========================
 def parse_first_bracket_list(out: str) -> str | None:
     # find first [...] segment
     m = re.search(r"\[[^\]]*\]", out, flags=re.DOTALL)
@@ -213,9 +198,7 @@ def extract_placewall_cell(plan_txt: str) -> str | None:
     m2 = re.search(r"\(\s*PlaceWall\s+([cC]_[A-Za-z0-9]+_[A-Za-z0-9]+)\s*\)", plan_txt)
     return m2.group(1) if m2 else None
 
-# =========================
 # Candidate goal selection
-# =========================
 def candidate_goal_cells_ui(pig_pos: dict, walls: list):
     pq, pr = pig_pos["q"], pig_pos["r"]
     wall_set = {(w["q"], w["r"]) for w in walls}
@@ -235,9 +218,7 @@ def candidate_goal_cells_ui(pig_pos: dict, walls: list):
             if is_valid(*nn) and nn not in wall_set and nn != (pq, pr):
                 yield nn
 
-# =========================
 # Spectra move (with caching)
-# =========================
 def board_cache_key(pig_pos: dict, walls: list) -> str:
     walls_sorted = sorted([(w["q"], w["r"]) for w in walls])
     payload = {"pig": (pig_pos["q"], pig_pos["r"]), "walls": walls_sorted}
@@ -307,9 +288,7 @@ def spectra_move(pig_pos: dict, walls: list):
 
     raise RuntimeError("Spectra did not return a usable PlaceWall plan for any candidate goal cell.")
 
-# =========================
 # Fallback move
-# =========================
 def fallback_move(pig_pos, walls):
     pq, pr = pig_pos["q"], pig_pos["r"]
     wall_set = {(w["q"], w["r"]) for w in walls}
@@ -329,9 +308,7 @@ def fallback_move(pig_pos, walls):
 
     return None, thoughts
 
-# =========================
 # API
-# =========================
 @app.route("/api/move", methods=["POST"])
 def get_move():
     data = request.json or {}
