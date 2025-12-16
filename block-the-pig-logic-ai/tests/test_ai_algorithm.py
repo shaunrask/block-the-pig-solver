@@ -2,88 +2,28 @@
 Comprehensive tests for the Block the Pig AI algorithm.
 Tests various scenarios to verify the AI picks optimal blocking moves.
 """
-from collections import deque
+import sys
+import os
 
-# Grid constants (matching app.py)
-COL_MIN, COL_MAX = 0, 4
-ROW_MIN, ROW_MAX = 0, 10
+# Add parent directory to path to import src
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-def get_neighbors(q, r):
-    """Get hex neighbors based on row parity."""
-    if r % 2 == 0:
-        return [(q+1, r), (q, r-1), (q-1, r-1), (q-1, r), (q-1, r+1), (q, r+1)]
-    else:
-        return [(q+1, r), (q+1, r-1), (q, r-1), (q-1, r), (q, r+1), (q+1, r+1)]
+from src.app import find_optimal_block, bfs_escape_path, is_escape, COL_MIN, COL_MAX, ROW_MIN, ROW_MAX
 
-def is_valid(q, r):
-    return COL_MIN <= q <= COL_MAX and ROW_MIN <= r <= ROW_MAX
-
-def is_escape(q, r):
-    if not is_valid(q, r): return False
-    return q == COL_MIN or q == COL_MAX or r == ROW_MIN or r == ROW_MAX
-
+# Helper for test compatibility - app.py now returns (dist, step), tests expect dist on escape
 def bfs_escape_distance(pq, pr, blocked_cells):
-    """BFS to find minimum distance from pig to any escape cell."""
-    # Check if pig is already on an escape cell
-    if is_escape(pq, pr):
-        return 0
-        
-    queue = deque([(pq, pr, 0)])
-    visited = {(pq, pr)}
-    
-    while queue:
-        q, r, dist = queue.popleft()
-        
-        for nq, nr in get_neighbors(q, r):
-            if is_valid(nq, nr) and (nq, nr) not in visited and (nq, nr) not in blocked_cells:
-                if is_escape(nq, nr):
-                    return dist + 1
-                visited.add((nq, nr))
-                queue.append((nq, nr, dist + 1))
-    
-    return float('inf')
+    dist, _ = bfs_escape_path(pq, pr, blocked_cells)
+    return dist
 
-def find_optimal_block(pig_pos, walls):
-    """Copy of the algorithm from app.py for testing."""
-    pq, pr = pig_pos['q'], pig_pos['r']
-    wall_set = set((w['q'], w['r']) for w in walls)
-    
-    current_distance = bfs_escape_distance(pq, pr, wall_set)
-    
-    if current_distance == float('inf') or current_distance == 0:
-        return None, []
-    
-    # Get candidate cells
-    candidates = set()
-    for nq, nr in get_neighbors(pq, pr):
-        if is_valid(nq, nr) and (nq, nr) not in wall_set:
-            candidates.add((nq, nr))
-    
-    for nq, nr in list(candidates):
-        for nnq, nnr in get_neighbors(nq, nr):
-            if is_valid(nnq, nnr) and (nnq, nnr) not in wall_set and (nnq, nnr) != (pq, pr):
-                candidates.add((nnq, nnr))
-    
-    best_cell = None
-    best_new_distance = current_distance
-    
-    for cell in candidates:
-        test_walls = wall_set | {cell}
-        new_distance = bfs_escape_distance(pq, pr, test_walls)
-        
-        if new_distance > best_new_distance:
-            best_new_distance = new_distance
-            best_cell = cell
-    
-    if best_cell:
-        return {'q': best_cell[0], 'r': best_cell[1]}, best_new_distance
-    
-    # Fallback
-    for nq, nr in get_neighbors(pq, pr):
-        if is_valid(nq, nr) and (nq, nr) not in wall_set:
-            return {'q': nq, 'r': nr}, current_distance
-    
-    return None, current_distance
+def find_optimal_block_wrapper(pig_pos, walls):
+    # Call the actual AI logic from src.app
+    move, thoughts = find_optimal_block(pig_pos, walls)
+    if move:
+        test_walls = set((w['q'], w['r']) for w in walls) | {(move['q'], move['r'])}
+        dist, _ = bfs_escape_path(pig_pos['q'], pig_pos['r'], test_walls)
+        return move, dist
+    return None, 0
+
 
 def find_TRUE_optimal(pig_pos, walls):
     """
@@ -121,7 +61,7 @@ def visualize_grid(pig_pos, walls, suggested_move=None):
     """Print a simple visualization of the hex grid."""
     pq, pr = pig_pos['q'], pig_pos['r']
     wall_set = set((w['q'], w['r']) for w in walls)
-    suggested = (suggested_move['q'], suggested_move['r']) if suggested_move else None
+    suggested = (suggested_move['q'], suggested_move['r']) if suggested_move and 'q' in suggested_move else None
     
     print("\n  Grid (q: 0-4, r: 0-10):")
     for r in range(ROW_MIN, ROW_MAX + 1):
@@ -152,7 +92,7 @@ def test_case_1():
     pig = {'q': 2, 'r': 5}
     walls = []
     
-    move, dist = find_optimal_block(pig, walls)
+    move, dist = find_optimal_block_wrapper(pig, walls)
     true_move, true_dist = find_TRUE_optimal(pig, walls)
     
     visualize_grid(pig, walls, move)
@@ -176,7 +116,7 @@ def test_case_2():
     pig = {'q': 1, 'r': 5}
     walls = []
     
-    move, dist = find_optimal_block(pig, walls)
+    move, dist = find_optimal_block_wrapper(pig, walls)
     true_move, true_dist = find_TRUE_optimal(pig, walls)
     
     visualize_grid(pig, walls, move)
@@ -237,7 +177,7 @@ def test_case_4():
         {'q': 1, 'r': 6}, {'q': 2, 'r': 6},
     ]
     
-    move, dist = find_optimal_block(pig, walls)
+    move, dist = find_optimal_block_wrapper(pig, walls)
     true_move, true_dist = find_TRUE_optimal(pig, walls)
     
     visualize_grid(pig, walls, move)
@@ -261,7 +201,7 @@ def test_case_5():
     pig = {'q': 1, 'r': 1}
     walls = []
     
-    move, dist = find_optimal_block(pig, walls)
+    move, dist = find_optimal_block_wrapper(pig, walls)
     true_move, true_dist = find_TRUE_optimal(pig, walls)
     
     visualize_grid(pig, walls, move)
@@ -289,7 +229,7 @@ def test_case_6():
         {'q': 1, 'r': 6}, {'q': 3, 'r': 6},  # Partial bottom
     ]
     
-    move, dist = find_optimal_block(pig, walls)
+    move, dist = find_optimal_block_wrapper(pig, walls)
     true_move, true_dist = find_TRUE_optimal(pig, walls)
     
     visualize_grid(pig, walls, move)
@@ -313,7 +253,7 @@ def test_case_7():
     pig = {'q': 0, 'r': 5}
     walls = []
     
-    move, dist = find_optimal_block(pig, walls)
+    move, dist = find_optimal_block_wrapper(pig, walls)
     
     print(f"  Pig is ON an escape cell (left edge)")
     print(f"  Algorithm returns: {move}")
