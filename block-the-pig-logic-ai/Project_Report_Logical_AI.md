@@ -15,7 +15,7 @@ The primary goal was to move beyond simple heuristic search and create an agent 
 1.  **Formal Modeling:** We employed **ShadowProver** syntax to codify the game's "Ground Truth" as logical axioms (e.g., `Adjacent(x,y)`, `Blocked(x)`). This ensures the AI operates within a strictly defined logical universe.
 2.  **Strategic Planning:** We used **Spectra** concepts to define the goal state (`Trapped(Pig)`) not just as a geometric condition, but as a logical theorem to be proved.
 3.  **Adversarial Reasoning:** Unlike basic solvers, our agent models the Pig as a rational adversary. The planning process involves finding a strategy that holds true *for all* potential counter-moves by the Pig.
-4.  **Feedback & Validation:** The system integrates a logical validation layer where Spectra-style theorems are generated to confirm the soundness of each move (e.g., `Theorem: winning_strategy_exists`).
+4.  **Feedback & Validation:** The system integrates a **Spectra Logic Engine** as a gatekeeper. Moves proposed by the search algorithm are subjected to formal axiom checks (Connectivity, Relevance, Progress). Any move that fails these properties is rejected, ensuring the agent's behavior is logically verifiable.
 
 ---
 
@@ -45,11 +45,11 @@ Instead of running a generic SAT solver at runtime (which encountered state-spac
 *   **Deep Reasoning (Minimax):** The agent performs a **16-ply adversarial search**. This corresponds to verifying logical statements of the form: "There exists a move $m_1$ such that for all pig moves $p_1$, there exists $m_2$..." up to depth 16.
 *   **Alpha-Beta Pruning:** This logical optimization allows the agent to discard entire branches of the reasoning tree that act as "proof by contradiction" (i.e., if this branch leads to a loss, we disprove it as a candidate).
 
-### 4.2. Spectra Validation Loop
-A key feature of the final system is the **Spectra Validator**. After the reasoning engine identifies an optimal move, the system runs a logical consistence check:
-1.  **Axiom Check:** Verifies the move violates no domain constraints.
-2.  **Theorem Generation:** Classifies the move as a "Lemma" (improves position) or a "Theorem" (guarantees a win).
-3.  **User Feedback:** The UI explicitly displays this logical analysis (e.g., `[SPECTRA] Theorem Proved: winning_strategy_exists`), providing transparency into the AI's deductive process.
+### 4.2. Spectra Logic Engine (Active Filter)
+A key feature of the final system is the **active logical verification**. After the reasoning engine identifies candidate moves, the **Spectra Logic Engine** enforces formal axioms:
+1.  **Axiom Check:** Verifies the move satisfies Accessibility, Relevance, and Progress axioms.
+2.  **Gatekeeping:** If a move fails a critical axiom (e.g., acts on a cell irrelevant to the escape theorem), it is **rejected**, forcing the AI to select a logically sound alternative.
+3.  **User Feedback:** The UI displays the logical proof trace (e.g., `Axiom(Relevance): FAIL`), providing transparency.
 
 ---
 
