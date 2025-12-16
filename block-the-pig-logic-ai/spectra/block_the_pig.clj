@@ -1,24 +1,143 @@
-{:name "Block the Pig Planning (One-Step Wall Planner)"
+{:name "Block the Pig Planning"
  :background [
-    ; Intentionally empty for speed.
-    ; For one-step wall planning, adjacency/escape facts are not needed.
+    (Adjacent C_m2_0 C_m1_0)
+    (Adjacent C_m2_0 C_m1_m1)
+    (Adjacent C_m2_0 C_m2_1)
+    (Adjacent C_m2_1 C_m1_1)
+    (Adjacent C_m2_1 C_m1_0)
+    (Adjacent C_m2_1 C_m2_0)
+    (Adjacent C_m2_1 C_m2_2)
+    (Adjacent C_m2_2 C_m1_2)
+    (Adjacent C_m2_2 C_m1_1)
+    (Adjacent C_m2_2 C_m2_1)
+    (Adjacent C_m1_m1 C_0_m1)
+    (Adjacent C_m1_m1 C_0_m2)
+    (Adjacent C_m1_m1 C_m2_0)
+    (Adjacent C_m1_m1 C_m1_0)
+    (Adjacent C_m1_0 C_0_0)
+    (Adjacent C_m1_0 C_0_m1)
+    (Adjacent C_m1_0 C_m1_m1)
+    (Adjacent C_m1_0 C_m2_0)
+    (Adjacent C_m1_0 C_m2_1)
+    (Adjacent C_m1_0 C_m1_1)
+    (Adjacent C_m1_1 C_0_1)
+    (Adjacent C_m1_1 C_0_0)
+    (Adjacent C_m1_1 C_m1_0)
+    (Adjacent C_m1_1 C_m2_1)
+    (Adjacent C_m1_1 C_m2_2)
+    (Adjacent C_m1_1 C_m1_2)
+    (Adjacent C_m1_2 C_0_2)
+    (Adjacent C_m1_2 C_0_1)
+    (Adjacent C_m1_2 C_m1_1)
+    (Adjacent C_m1_2 C_m2_2)
+    (Adjacent C_0_m2 C_1_m2)
+    (Adjacent C_0_m2 C_m1_m1)
+    (Adjacent C_0_m2 C_0_m1)
+    (Adjacent C_0_m1 C_1_m1)
+    (Adjacent C_0_m1 C_1_m2)
+    (Adjacent C_0_m1 C_0_m2)
+    (Adjacent C_0_m1 C_m1_m1)
+    (Adjacent C_0_m1 C_m1_0)
+    (Adjacent C_0_m1 C_0_0)
+    (Adjacent C_0_0 C_1_0)
+    (Adjacent C_0_0 C_1_m1)
+    (Adjacent C_0_0 C_0_m1)
+    (Adjacent C_0_0 C_m1_0)
+    (Adjacent C_0_0 C_m1_1)
+    (Adjacent C_0_0 C_0_1)
+    (Adjacent C_0_1 C_1_1)
+    (Adjacent C_0_1 C_1_0)
+    (Adjacent C_0_1 C_0_0)
+    (Adjacent C_0_1 C_m1_1)
+    (Adjacent C_0_1 C_m1_2)
+    (Adjacent C_0_1 C_0_2)
+    (Adjacent C_0_2 C_1_1)
+    (Adjacent C_0_2 C_0_1)
+    (Adjacent C_0_2 C_m1_2)
+    (Adjacent C_1_m2 C_2_m2)
+    (Adjacent C_1_m2 C_0_m2)
+    (Adjacent C_1_m2 C_0_m1)
+    (Adjacent C_1_m2 C_1_m1)
+    (Adjacent C_1_m1 C_2_m1)
+    (Adjacent C_1_m1 C_2_m2)
+    (Adjacent C_1_m1 C_1_m2)
+    (Adjacent C_1_m1 C_0_m1)
+    (Adjacent C_1_m1 C_0_0)
+    (Adjacent C_1_m1 C_1_0)
+    (Adjacent C_1_0 C_2_0)
+    (Adjacent C_1_0 C_2_m1)
+    (Adjacent C_1_0 C_1_m1)
+    (Adjacent C_1_0 C_0_0)
+    (Adjacent C_1_0 C_0_1)
+    (Adjacent C_1_0 C_1_1)
+    (Adjacent C_1_1 C_2_0)
+    (Adjacent C_1_1 C_1_0)
+    (Adjacent C_1_1 C_0_1)
+    (Adjacent C_1_1 C_0_2)
+    (Adjacent C_2_m2 C_1_m2)
+    (Adjacent C_2_m2 C_1_m1)
+    (Adjacent C_2_m2 C_2_m1)
+    (Adjacent C_2_m1 C_2_m2)
+    (Adjacent C_2_m1 C_1_m1)
+    (Adjacent C_2_m1 C_1_0)
+    (Adjacent C_2_m1 C_2_0)
+    (Adjacent C_2_0 C_2_m1)
+    (Adjacent C_2_0 C_1_0)
+    (Adjacent C_2_0 C_1_1)
+    (Escape C_m2_0)
+    (Escape C_m2_1)
+    (Escape C_m2_2)
+    (Escape C_m1_m1)
+    (Escape C_m1_2)
+    (Escape C_0_m2)
+    (Escape C_0_2)
+    (Escape C_1_m2)
+    (Escape C_1_1)
+    (Escape C_2_m2)
+    (Escape C_2_m1)
+    (Escape C_2_0)
+    (forall (c) (if (OccupiedByPig c) (not (HasWall c))))
+    (forall (c) (if (HasWall c) (not (Escape c))))
+    (iff Trapped (forall (c1) (if (OccupiedByPig c1) (forall (c2) (if (Adjacent c1 c2) (HasWall c2))))))
  ]
-
  :actions [
-    (define-action PlaceWall [?c] {
-        :preconditions [(Free ?c)]
-        :additions [(HasWall ?c)]
-        :deletions [(Free ?c)]
-    })
- ]
 
+        (define-action PlaceWall [?c] {
+            :preconditions [(Free ?c)]
+            :additions [(HasWall ?c)]
+            :deletions [(Free ?c)]
+        })
+    
+
+        (define-action PigMove [?a ?b] {
+            :preconditions [(OccupiedByPig ?a) (Adjacent ?a ?b) (Free ?b)]
+            :additions [(OccupiedByPig ?b) (Free ?a)]
+            :deletions [(OccupiedByPig ?a) (Free ?b)]
+        })
+    
+ ]
  :start [
-    ; NOTE: app.py overwrites this entire :start block at runtime.
     (OccupiedByPig C_0_0)
+    (Free C_m2_0)
+    (Free C_m2_1)
+    (Free C_m2_2)
+    (Free C_m1_m1)
+    (Free C_m1_0)
+    (Free C_m1_1)
+    (Free C_m1_2)
+    (Free C_0_m2)
+    (Free C_0_m1)
+    (Free C_0_1)
+    (Free C_0_2)
+    (Free C_1_m2)
+    (Free C_1_m1)
+    (Free C_1_0)
+    (Free C_1_1)
+    (Free C_2_m2)
+    (Free C_2_m1)
+    (Free C_2_0)
  ]
-
  :goal [
-    ; NOTE: app.py overwrites this entire :goal block at runtime.
     (HasWall C_0_1)
  ]
 }
