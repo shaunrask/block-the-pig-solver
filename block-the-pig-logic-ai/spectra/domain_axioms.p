@@ -1,1 +1,359 @@
-;; Domain axioms placeholder
+from flask import Flask, render_template, request, jsonify
+import os, re, time, json, hashlib, tempfile, subprocess
+from collections import deque
+
+app = Flask(__name__)
+
+# =========================
+# UI board constants
+# =========================
+COL_MIN, COL_MAX = 0, 4
+ROW_MIN, ROW_MAX = 0, 10
+
+# Your JS "visual center"
+UI_CENTER_Q = 2
+UI_CENTER_R = 5
+
+# =========================
+# Spectra / Java config
+# =========================
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+SPECTRA_DIR = os.path.join(PROJECT_ROOT, "spectra")
+TEMPLATE_CLJ = os.path.join(SPECTRA_DIR, "block_the_pig.clj")
+
+TOOLS_DIR = os.path.join(PROJECT_ROOT, "tools")
+SPECTRA_JAR = os.path.join(TOOLS_DIR, "Spectra.jar")
+
+JAVA17_EXE = r"C:\Program Files\Eclipse Adoptium\jdk-17.0.17.10-hotspot\bin\java.exe"
+
+# If Spectra sometimes takes ~20s on first run, caching matters a lot.
+SPECTRA_TIMEOUT_SECONDS = 45
+
+# In-memory cache: key(board_state) -> move dict
+SPECTRA_CACHE = {}
+
+DEBUG_DIR = os.path.join(PROJECT_ROOT, "spectra_debug")
+os.makedirs(DEBUG_DIR, exist_ok=True)
+
+# =========================
+# Routes
+# =========================
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+# =========================
+# UI helpers
+# =========================
+def get_neighbors(q, r):
+    # MUST match game.js odd-row rules
+    if r % 2 == 0:
+        return [(q+1, r), (q, r-1), (q-1, r-1), (q-1, r), (q-1, r+1), (q, r+1)]
+    else:
+        return [(q+1, r), (q+1, r-1), (q, r-1), (q-1, r), (q, r+1), (q+1, r+1)]
+
+def is_valid(q, r):
+    return COL_MIN <= q <= COL_MAX and ROW_MIN <= r <= ROW_MAX
+
+def is_escape(q, r):
+    return is_valid(q, r) and (q == COL_MIN or q == COL_MAX or r == ROW_MIN or r == ROW_MAX)
+
+def bfs_escape_path(start_q, start_r, blocked_cells):
+    """Returns (distance, first_step) to escape under current walls."""
+    if is_escape(start_q, start_r):
+        return 0, None
+    queue = deque([(start_q, start_r, 0, None)])
+    visited = {(start_q, start_r)}
+    while queue:
+        q, r, dist, first = queue.popleft()
+        for nq, nr in get_neighbors(q, r):
+            if is_valid(nq, nr) and (nq, nr) not in visited and (nq, nr) not in blocked_cells:
+                new_first = first if first else (nq, nr)
+                if is_escape(nq, nr):
+                    return dist + 1, new_first
+                visited.add((nq, nr))
+                queue.append((nq, nr, dist + 1, new_first))
+    return float("inf"), None
+
+# =========================
+# Logic cell naming
+# We map UI (q,r) to C_dq_dr relative to UI center (2,5)
+# Example: UI (2,5) -> C_0_0
+# =========================
+def _enc(n: int) -> str:
+    return f"m{abs(n)}" if n < 0 else str(n)
+
+def _dec(tok: str) -> int:
+    tok = tok.strip()
+    return -int(tok[1:]) if tok.startswith("m") else int(tok)
+
+def ui_to_cell(q: int, r: int) -> str:
+    dq = q - UI_CENTER_Q
+    dr = r - UI_CENTER_R
+    return f"C_{_enc(dq)}_{_enc(dr)}"
+
+def cell_to_ui(cell: str) -> dict:
+    cell = cell.strip()
+    # accept c_... or C_...
+    if cell.startswith("c_"):
+        cell = "C_" + cell[2:]
+
+    parts = cell.split("_")
+    if len(parts) != 3:
+        raise ValueError(f"Bad cell token: {cell}")
+
+    dq = _dec(parts[1])
+    dr = _dec(parts[2])
+    return {"q": dq + UI_CENTER_Q, "r": dr + UI_CENTER_R}
+
+def all_ui_cells():
+    for q in range(COL_MIN, COL_MAX + 1):
+        for r in range(ROW_MIN, ROW_MAX + 1):
+            yield q, r
+
+# =========================
+# Spectra file generation
+# =========================
+def build_start_block(pig_pos: dict, walls: list) -> str:
+    pig_cell = ui_to_cell(pig_pos["q"], pig_pos["r"])
+    wall_cells = {ui_to_cell(w["q"], w["r"]) for w in walls}
+
+    # Free = every board cell except pig and walls
+    all_cells_logic = [ui_to_cell(q, r) for (q, r) in all_ui_cells()]
+    free_cells = [c for c in all_cells_logic if c != pig_cell and c not in wall_cells]
+
+    lines = [f"    (OccupiedByPig {pig_cell})"]
+    for c in sorted(wall_cells):
+        lines.append(f"    (HasWall {c})")
+    for c in sorted(free_cells):
+        lines.append(f"    (Free {c})")
+
+    return ":start [\n" + "\n".join(lines) + "\n ]"
+
+def build_goal_block(goal_cell: str) -> str:
+    return f":goal [\n    (HasWall {goal_cell})\n ]"
+
+def write_temp_clj(pig_pos: dict, walls: list, goal_cell: str) -> str:
+    if not os.path.exists(TEMPLATE_CLJ):
+        raise FileNotFoundError(f"Template .clj not found: {TEMPLATE_CLJ}")
+
+    with open(TEMPLATE_CLJ, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    # Replace :start [ ... ]
+    start_re = re.compile(r":start\s*\[(.*?)\]\s*", re.DOTALL)
+    if not start_re.search(text):
+        raise RuntimeError("Template missing :start [ ... ]")
+    text = start_re.sub(build_start_block(pig_pos, walls) + "\n", text, count=1)
+
+    # Replace :goal [ ... ]
+    goal_re = re.compile(r":goal\s*\[(.*?)\]\s*", re.DOTALL)
+    if not goal_re.search(text):
+        raise RuntimeError("Template missing :goal [ ... ]")
+    text = goal_re.sub(build_goal_block(goal_cell) + "\n", text, count=1)
+
+    fd, tmp_path = tempfile.mkstemp(prefix="btp_", suffix=".clj", dir=PROJECT_ROOT, text=True)
+    os.close(fd)
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return tmp_path
+
+def spectra_cmd():
+    java = JAVA17_EXE if os.path.exists(JAVA17_EXE) else "java"
+    return [java, "-jar", SPECTRA_JAR]
+
+def run_spectra(clj_path: str, timeout_s: int) -> str:
+    if not os.path.exists(SPECTRA_JAR):
+        raise FileNotFoundError(f"Spectra.jar not found: {SPECTRA_JAR}")
+
+    cmd = spectra_cmd() + [clj_path]
+    result = subprocess.run(
+        cmd,
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=timeout_s
+    )
+    out = (result.stdout or "").strip()
+    err = (result.stderr or "").strip()
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Spectra failed (code {result.returncode}). STDERR:\n{err}\nSTDOUT:\n{out}")
+
+    return out or err
+
+def save_debug(tag: str, out: str) -> str:
+    path = os.path.join(DEBUG_DIR, f"spectra_{tag}.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(out)
+    return path
+
+# =========================
+# Plan parsing
+# =========================
+def parse_first_bracket_list(out: str) -> str | None:
+    # find first [...] segment
+    m = re.search(r"\[[^\]]*\]", out, flags=re.DOTALL)
+    return m.group(0).strip() if m else None
+
+def extract_placewall_cell(plan_txt: str) -> str | None:
+    if not plan_txt:
+        return None
+    if plan_txt.strip() == "[]":
+        return None
+
+    # Accept both:
+    # [(PlaceWall c_1_m1) ]
+    # [PlaceWall C_1_m1]
+    m = re.search(r"PlaceWall\s+([cC]_[A-Za-z0-9]+_[A-Za-z0-9]+)", plan_txt)
+    if m:
+        return m.group(1)
+
+    # Sometimes parentheses wrap it: (PlaceWall c_1_m1)
+    m2 = re.search(r"\(\s*PlaceWall\s+([cC]_[A-Za-z0-9]+_[A-Za-z0-9]+)\s*\)", plan_txt)
+    return m2.group(1) if m2 else None
+
+# =========================
+# Candidate goal selection
+# =========================
+def candidate_goal_cells_ui(pig_pos: dict, walls: list):
+    pq, pr = pig_pos["q"], pig_pos["r"]
+    wall_set = {(w["q"], w["r"]) for w in walls}
+
+    dist, next_step = bfs_escape_path(pq, pr, wall_set)
+    if next_step and next_step not in wall_set:
+        yield next_step
+
+    for n in get_neighbors(pq, pr):
+        if is_valid(*n) and n not in wall_set and n != (pq, pr):
+            yield n
+
+    for n in get_neighbors(pq, pr):
+        if not is_valid(*n):
+            continue
+        for nn in get_neighbors(*n):
+            if is_valid(*nn) and nn not in wall_set and nn != (pq, pr):
+                yield nn
+
+# =========================
+# Spectra move (with caching)
+# =========================
+def board_cache_key(pig_pos: dict, walls: list) -> str:
+    walls_sorted = sorted([(w["q"], w["r"]) for w in walls])
+    payload = {"pig": (pig_pos["q"], pig_pos["r"]), "walls": walls_sorted}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+def spectra_move(pig_pos: dict, walls: list):
+    thoughts = []
+    thoughts.append("[SPECTRA] One-step planning mode: try candidate goal cells until Spectra returns a non-empty plan.")
+
+    key = board_cache_key(pig_pos, walls)
+    if key in SPECTRA_CACHE:
+        cached = SPECTRA_CACHE[key]
+        thoughts.append("[SPECTRA] Cache hit: returning previously computed move.")
+        return cached, thoughts
+
+    wall_cells_logic = {ui_to_cell(w["q"], w["r"]) for w in walls}
+
+    tried = 0
+    start_t = time.time()
+
+    for (cq, cr) in candidate_goal_cells_ui(pig_pos, walls):
+        goal_cell = ui_to_cell(cq, cr)
+        if goal_cell in wall_cells_logic:
+            continue
+
+        tried += 1
+        tmp_path = None
+        try:
+            tmp_path = write_temp_clj(pig_pos, walls, goal_cell)
+            out = run_spectra(tmp_path, timeout_s=SPECTRA_TIMEOUT_SECONDS)
+
+            plan = parse_first_bracket_list(out)
+            if not plan:
+                tag = key[:8] + f"_{tried}"
+                dbg = save_debug(tag, out)
+                thoughts.append(f"[SPECTRA] Candidate {goal_cell}: no bracket plan found. Saved: {dbg}")
+                continue
+
+            if plan.strip() == "[]":
+                thoughts.append(f"[SPECTRA] Candidate {goal_cell}: plan was empty [] (goal already true or unreachable).")
+                continue
+
+            cell = extract_placewall_cell(plan)
+            if not cell:
+                tag = key[:8] + f"_{tried}"
+                dbg = save_debug(tag, out)
+                thoughts.append(f"[SPECTRA] Candidate {goal_cell}: couldn't parse PlaceWall cell. Saved: {dbg}")
+                thoughts.append(f"[SPECTRA] Plan text: {plan}")
+                continue
+
+            move = cell_to_ui(cell)
+            elapsed = time.time() - start_t
+
+            thoughts.append(f"[SPECTRA] SUCCESS after {tried} candidates in {elapsed:.2f}s")
+            thoughts.append(f"[SPECTRA] Plan: {plan}")
+            thoughts.append(f"[SPECTRA] Move: PlaceWall {cell} -> UI=({move['q']},{move['r']})")
+
+            SPECTRA_CACHE[key] = move
+            return move, thoughts
+
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+    raise RuntimeError("Spectra did not return a usable PlaceWall plan for any candidate goal cell.")
+
+# =========================
+# Fallback move
+# =========================
+def fallback_move(pig_pos, walls):
+    pq, pr = pig_pos["q"], pig_pos["r"]
+    wall_set = {(w["q"], w["r"]) for w in walls}
+
+    thoughts = []
+    dist, next_step = bfs_escape_path(pq, pr, wall_set)
+    thoughts.append(f"[FALLBACK] Current escape distance: {dist if dist != float('inf') else 'trapped'}")
+
+    if next_step and next_step not in wall_set:
+        thoughts.append(f"[FALLBACK] Blocking next-step cell: {next_step}")
+        return {"q": next_step[0], "r": next_step[1]}, thoughts
+
+    for nq, nr in get_neighbors(pq, pr):
+        if is_valid(nq, nr) and (nq, nr) not in wall_set and (nq, nr) != (pq, pr):
+            thoughts.append(f"[FALLBACK] Blocking neighbor: {(nq, nr)}")
+            return {"q": nq, "r": nr}, thoughts
+
+    return None, thoughts
+
+# =========================
+# API
+# =========================
+@app.route("/api/move", methods=["POST"])
+def get_move():
+    data = request.json or {}
+    pig_pos = data.get("pig_pos", {"q": UI_CENTER_Q, "r": UI_CENTER_R})
+    walls = data.get("walls", [])
+
+    thoughts = ["Decision engine: Spectra planner (fallback = minimax)."]
+
+    try:
+        move, t = spectra_move(pig_pos, walls)
+        thoughts.extend(t)
+        return jsonify({"move": move, "thoughts": thoughts})
+
+    except subprocess.TimeoutExpired:
+        thoughts.append(f"[SPECTRA] Timed out after {SPECTRA_TIMEOUT_SECONDS}s.")
+    except Exception as e:
+        thoughts.append(f"[SPECTRA] Failed: {e}")
+
+    move, t = fallback_move(pig_pos, walls)
+    thoughts.extend(t)
+    thoughts.append("[FALLBACK] Returned heuristic move (Spectra unavailable).")
+    return jsonify({"move": move, "thoughts": thoughts})
+
+if __name__ == "__main__":
+    app.run(debug=True)
