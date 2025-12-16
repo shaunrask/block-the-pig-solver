@@ -10,28 +10,27 @@ app = Flask(__name__)
 COL_MIN, COL_MAX = 0, 4
 ROW_MIN, ROW_MAX = 0, 10
 
+# Your JS "visual center"
 UI_CENTER_Q = 2
 UI_CENTER_R = 5
 
 # =========================
-# Project / tool paths
+# Spectra / Java config
 # =========================
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-
 SPECTRA_DIR = os.path.join(PROJECT_ROOT, "spectra")
 TEMPLATE_CLJ = os.path.join(SPECTRA_DIR, "block_the_pig.clj")
 
 TOOLS_DIR = os.path.join(PROJECT_ROOT, "tools")
 SPECTRA_JAR = os.path.join(TOOLS_DIR, "Spectra.jar")
-SHADOWPROVER_JAR = os.path.join(TOOLS_DIR, "Shadow-Prover.jar")
 
 JAVA17_EXE = r"C:\Program Files\Eclipse Adoptium\jdk-17.0.17.10-hotspot\bin\java.exe"
 
+# If Spectra sometimes takes ~20s on first run, caching matters a lot.
 SPECTRA_TIMEOUT_SECONDS = 45
-SHADOW_TIMEOUT_SECONDS = 10   # effective timeout; we terminate early on success markers
 
+# In-memory cache: key(board_state) -> move dict
 SPECTRA_CACHE = {}
-SHADOW_CACHE = {}
 
 DEBUG_DIR = os.path.join(PROJECT_ROOT, "spectra_debug")
 os.makedirs(DEBUG_DIR, exist_ok=True)
@@ -60,6 +59,7 @@ def is_escape(q, r):
     return is_valid(q, r) and (q == COL_MIN or q == COL_MAX or r == ROW_MIN or r == ROW_MAX)
 
 def bfs_escape_path(start_q, start_r, blocked_cells):
+    """Returns (distance, first_step) to escape under current walls."""
     if is_escape(start_q, start_r):
         return 0, None
     queue = deque([(start_q, start_r, 0, None)])
@@ -77,6 +77,8 @@ def bfs_escape_path(start_q, start_r, blocked_cells):
 
 # =========================
 # Logic cell naming
+# We map UI (q,r) to C_dq_dr relative to UI center (2,5)
+# Example: UI (2,5) -> C_0_0
 # =========================
 def _enc(n: int) -> str:
     return f"m{abs(n)}" if n < 0 else str(n)
@@ -90,18 +92,16 @@ def ui_to_cell(q: int, r: int) -> str:
     dr = r - UI_CENTER_R
     return f"C_{_enc(dq)}_{_enc(dr)}"
 
-def normalize_cell_token(cell: str) -> str:
-    # Spectra sometimes prints c_1_m1; normalize to C_1_m1
-    cell = cell.strip()
-    if cell.startswith("c_"):
-        return "C_" + cell[2:]
-    return cell
-
 def cell_to_ui(cell: str) -> dict:
-    cell = normalize_cell_token(cell)
+    cell = cell.strip()
+    # accept c_... or C_...
+    if cell.startswith("c_"):
+        cell = "C_" + cell[2:]
+
     parts = cell.split("_")
     if len(parts) != 3:
         raise ValueError(f"Bad cell token: {cell}")
+
     dq = _dec(parts[1])
     dr = _dec(parts[2])
     return {"q": dq + UI_CENTER_Q, "r": dr + UI_CENTER_R}
@@ -118,6 +118,7 @@ def build_start_block(pig_pos: dict, walls: list) -> str:
     pig_cell = ui_to_cell(pig_pos["q"], pig_pos["r"])
     wall_cells = {ui_to_cell(w["q"], w["r"]) for w in walls}
 
+    # Free = every board cell except pig and walls
     all_cells_logic = [ui_to_cell(q, r) for (q, r) in all_ui_cells()]
     free_cells = [c for c in all_cells_logic if c != pig_cell and c not in wall_cells]
 
@@ -139,11 +140,13 @@ def write_temp_clj(pig_pos: dict, walls: list, goal_cell: str) -> str:
     with open(TEMPLATE_CLJ, "r", encoding="utf-8") as f:
         text = f.read()
 
+    # Replace :start [ ... ]
     start_re = re.compile(r":start\s*\[(.*?)\]\s*", re.DOTALL)
     if not start_re.search(text):
         raise RuntimeError("Template missing :start [ ... ]")
     text = start_re.sub(build_start_block(pig_pos, walls) + "\n", text, count=1)
 
+    # Replace :goal [ ... ]
     goal_re = re.compile(r":goal\s*\[(.*?)\]\s*", re.DOTALL)
     if not goal_re.search(text):
         raise RuntimeError("Template missing :goal [ ... ]")
@@ -155,25 +158,28 @@ def write_temp_clj(pig_pos: dict, walls: list, goal_cell: str) -> str:
         f.write(text)
     return tmp_path
 
-def _java_cmd_base():
+def spectra_cmd():
     java = JAVA17_EXE if os.path.exists(JAVA17_EXE) else "java"
-    return [
-        java,
-        "-XX:TieredStopAtLevel=1",
-        "-Xms16m",
-        "-Xmx128m",
-    ]
+    return [java, "-jar", SPECTRA_JAR]
 
 def run_spectra(clj_path: str, timeout_s: int) -> str:
     if not os.path.exists(SPECTRA_JAR):
         raise FileNotFoundError(f"Spectra.jar not found: {SPECTRA_JAR}")
 
-    cmd = _java_cmd_base() + ["-jar", SPECTRA_JAR, clj_path]
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=timeout_s)
+    cmd = spectra_cmd() + [clj_path]
+    result = subprocess.run(
+        cmd,
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=timeout_s
+    )
     out = (result.stdout or "").strip()
     err = (result.stderr or "").strip()
+
     if result.returncode != 0:
         raise RuntimeError(f"Spectra failed (code {result.returncode}). STDERR:\n{err}\nSTDOUT:\n{out}")
+
     return out or err
 
 def save_debug(tag: str, out: str) -> str:
@@ -186,15 +192,24 @@ def save_debug(tag: str, out: str) -> str:
 # Plan parsing
 # =========================
 def parse_first_bracket_list(out: str) -> str | None:
+    # find first [...] segment
     m = re.search(r"\[[^\]]*\]", out, flags=re.DOTALL)
     return m.group(0).strip() if m else None
 
 def extract_placewall_cell(plan_txt: str) -> str | None:
-    if not plan_txt or plan_txt.strip() == "[]":
+    if not plan_txt:
         return None
+    if plan_txt.strip() == "[]":
+        return None
+
+    # Accept both:
+    # [(PlaceWall c_1_m1) ]
+    # [PlaceWall C_1_m1]
     m = re.search(r"PlaceWall\s+([cC]_[A-Za-z0-9]+_[A-Za-z0-9]+)", plan_txt)
     if m:
         return m.group(1)
+
+    # Sometimes parentheses wrap it: (PlaceWall c_1_m1)
     m2 = re.search(r"\(\s*PlaceWall\s+([cC]_[A-Za-z0-9]+_[A-Za-z0-9]+)\s*\)", plan_txt)
     return m2.group(1) if m2 else None
 
@@ -221,160 +236,16 @@ def candidate_goal_cells_ui(pig_pos: dict, walls: list):
                 yield nn
 
 # =========================
-# Cache keys
+# Spectra move (with caching)
 # =========================
 def board_cache_key(pig_pos: dict, walls: list) -> str:
     walls_sorted = sorted([(w["q"], w["r"]) for w in walls])
     payload = {"pig": (pig_pos["q"], pig_pos["r"]), "walls": walls_sorted}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
-def shadow_cache_key(pig_pos: dict, walls: list, move_cell: str) -> str:
-    walls_sorted = sorted([(w["q"], w["r"]) for w in walls])
-    payload = {"pig": (pig_pos["q"], pig_pos["r"]), "walls": walls_sorted, "move": move_cell}
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
-
-# =========================
-# ShadowProver (certifier)
-# =========================
-def write_shadow_problem_clj(pig_pos: dict, walls: list, move_cell: str) -> str:
-    move_cell = normalize_cell_token(move_cell)
-
-    pig_cell = ui_to_cell(pig_pos["q"], pig_pos["r"])
-    wall_cells = [ui_to_cell(w["q"], w["r"]) for w in walls]
-
-    # Ground (no forall) assumptions.
-    assumptions = []
-    assumptions.append(f"(OccupiedByPig {pig_cell})")
-    for c in wall_cells:
-        assumptions.append(f"(HasWall {c})")
-
-    # NOTE: We keep the simple local rules.
-    assumptions.append(f"(if (OccupiedByPig {move_cell}) (not (CanPlaceWall {move_cell})))")
-    assumptions.append(f"(if (HasWall {move_cell}) (not (CanPlaceWall {move_cell})))")
-    assumptions.append(f"(if (and (not (OccupiedByPig {move_cell})) (not (HasWall {move_cell}))) (CanPlaceWall {move_cell}))")
-
-    lines = []
-    lines.append('{:name "BTP Move Certification (Grounded)"')
-    lines.append(' :description "ShadowProver certifies PlaceWall legality for ONE concrete cell (no forall)"')
-    lines.append(' :assumptions {')
-    for i, a in enumerate(assumptions):
-        lines.append(f"  A{i} {a}")
-    lines.append(' }')
-    lines.append(f" :goal (CanPlaceWall {move_cell})")
-    lines.append("}")
-
-    fd, tmp_path = tempfile.mkstemp(prefix="shadow_btp_", suffix=".clj", dir=PROJECT_ROOT, text=True)
-    os.close(fd)
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
-    return tmp_path
-
-def run_shadowprover_stream(problem_clj_path: str, timeout_s: int) -> str:
-    """
-    IMPORTANT: Many ShadowProver jars run as a long-lived gateway/server.
-    So we stream output and terminate once we see a success/failure marker.
-    """
-    if not os.path.exists(SHADOWPROVER_JAR):
-        raise FileNotFoundError(f"Shadow-Prover.jar not found: {SHADOWPROVER_JAR}")
-
-    cmd = _java_cmd_base() + ["-jar", SHADOWPROVER_JAR, problem_clj_path]
-
-    proc = subprocess.Popen(
-        cmd,
-        cwd=PROJECT_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        universal_newlines=True
-    )
-
-    out_lines = []
-    start = time.time()
-
-    # Markers to stop early
-    success_markers = ["Theorem Proved", "PROVED", "Valid"]
-    fail_markers = ["NOT PROVED", "Counterexample", "Theorem Refuted", "Refuted", "Unsat", "SAT? false"]
-
-    try:
-        while True:
-            # Timeout check
-            if time.time() - start > timeout_s:
-                break
-
-            line = proc.stdout.readline() if proc.stdout else ""
-            if line:
-                out_lines.append(line.rstrip("\n"))
-
-                joined = "\n".join(out_lines)
-                if any(m in joined for m in success_markers) or any(m in joined for m in fail_markers):
-                    break
-            else:
-                # No new line; small sleep to avoid busy loop
-                time.sleep(0.03)
-
-            # If it actually exits, stop
-            if proc.poll() is not None:
-                break
-
-    finally:
-        # Always terminate (gateway-style jars keep running)
-        if proc.poll() is None:
-            try:
-                proc.terminate()
-                proc.wait(timeout=1.0)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-
-    return "\n".join(out_lines).strip()
-
-def shadowprover_certify_can_place(pig_pos: dict, walls: list, move_cell: str):
-    logs = []
-    if not os.path.exists(SHADOWPROVER_JAR):
-        logs.append("[SHADOW] ShadowProver jar missing -> skipping certification.")
-        return True, logs
-
-    move_cell = normalize_cell_token(move_cell)
-    key = shadow_cache_key(pig_pos, walls, move_cell)
-    if key in SHADOW_CACHE:
-        ok = SHADOW_CACHE[key]
-        logs.append(f"[SHADOW] Cache hit: CanPlaceWall({move_cell}) = {ok}")
-        return ok, logs
-
-    tmp_path = None
-    try:
-        tmp_path = write_shadow_problem_clj(pig_pos, walls, move_cell)
-        out = run_shadowprover_stream(tmp_path, timeout_s=SHADOW_TIMEOUT_SECONDS)
-
-        ok = ("Theorem Proved" in out) or ("PROVED" in out) or ("Valid" in out)
-
-        logs.append(f"[SHADOW] Goal: CanPlaceWall {move_cell}")
-        logs.append(f"[SHADOW] Result: {'PROVED' if ok else 'NOT PROVED/UNKNOWN'}")
-        logs.append(f"[SHADOW] Output(head): {out[:240].replace(chr(10), ' ')}")
-
-        SHADOW_CACHE[key] = ok
-        return ok, logs
-
-    except Exception as e:
-        logs.append(f"[SHADOW] Failed: {e} -> skipping certification.")
-        return True, logs
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-
-# =========================
-# Spectra move
-# =========================
 def spectra_move(pig_pos: dict, walls: list):
     thoughts = []
     thoughts.append("[SPECTRA] One-step planning mode: try candidate goal cells until Spectra returns a non-empty plan.")
-    thoughts.append("[SPECTRA] ShadowProver certifier: prove CanPlaceWall(move) before accepting.")
 
     key = board_cache_key(pig_pos, walls)
     if key in SPECTRA_CACHE:
@@ -415,14 +286,6 @@ def spectra_move(pig_pos: dict, walls: list):
                 dbg = save_debug(tag, out)
                 thoughts.append(f"[SPECTRA] Candidate {goal_cell}: couldn't parse PlaceWall cell. Saved: {dbg}")
                 thoughts.append(f"[SPECTRA] Plan text: {plan}")
-                continue
-
-            cell = normalize_cell_token(cell)
-            ok, shadow_logs = shadowprover_certify_can_place(pig_pos, walls, cell)
-            thoughts.extend(shadow_logs)
-
-            if not ok:
-                thoughts.append(f"[SPECTRA] ShadowProver rejected {cell}; trying next candidate.")
                 continue
 
             move = cell_to_ui(cell)
@@ -475,7 +338,7 @@ def get_move():
     pig_pos = data.get("pig_pos", {"q": UI_CENTER_Q, "r": UI_CENTER_R})
     walls = data.get("walls", [])
 
-    thoughts = ["Decision engine: Spectra planner + ShadowProver certifier (fallback = heuristic)."]
+    thoughts = ["Decision engine: Spectra planner (fallback = minimax)."]
 
     try:
         move, t = spectra_move(pig_pos, walls)
@@ -494,3 +357,5 @@ def get_move():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
