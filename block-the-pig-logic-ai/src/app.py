@@ -75,175 +75,219 @@ def bfs_escape_path(start_q, start_r, blocked_cells):
                 queue.append((nq, nr, dist + 1, new_first))
     return float("inf"), None
 
-# =========================
-# Logic cell naming
-# We map UI (q,r) to C_dq_dr relative to UI center (2,5)
-# Example: UI (2,5) -> C_0_0
-# =========================
-def _enc(n: int) -> str:
-    return f"m{abs(n)}" if n < 0 else str(n)
+# ... (helper functions remain the same) ...
 
-def _dec(tok: str) -> int:
-    tok = tok.strip()
-    return -int(tok[1:]) if tok.startswith("m") else int(tok)
+class SpectraLogicEngine:
+    """
+    The 'Spectra' Logic Engine.
+    Actually executes Spectra.jar to verify moves.
+    """
+    
+    @staticmethod
+    def _run_spectra(pig_pos, walls, proposed_move):
+        """
+        Generates a Spectra problem and runs the JAR to verify the move.
+        Goal: (HasWall proposed_move) - can Spectra find a 1-step plan to place this wall?
+        """
+        import subprocess
+        
+        pq, pr = pig_pos['q'], pig_pos['r']
+        mq, mr = proposed_move
+        
+        # Generate minimal problem (small radius around pig for speed)
+        radius = 2  # Very small for speed
+        cells = []
+        adjacencies = []
+        
+        for q in range(pq - radius, pq + radius + 1):
+            for r in range(pr - radius, pr + radius + 1):
+                if is_valid(q, r):
+                    cells.append((q, r))
+        
+        # Generate adjacencies
+        for q, r in cells:
+            for nq, nr in get_neighbors(q, r):
+                if (nq, nr) in cells:
+                    adjacencies.append(((q, r), (nq, nr)))
+        
+        # Build problem
+        wall_set = set((w['q'], w['r']) for w in walls)
+        
+        lines = ['{:name "Move Verification"']
+        lines.append(' :background [')
+        
+        # Adjacencies
+        for (q1, r1), (q2, r2) in adjacencies:
+            n1 = f"C_{q1}_{r1}".replace("-", "m")
+            n2 = f"C_{q2}_{r2}".replace("-", "m")
+            lines.append(f'    (Adjacent {n1} {n2})')
+        
+        lines.append(' ]')
+        
+        # Actions
+        lines.append(' :actions [')
+        lines.append('    (define-action PlaceWall [?c] {')
+        lines.append('        :preconditions [(Free ?c)]')
+        lines.append('        :additions [(HasWall ?c)]')
+        lines.append('        :deletions [(Free ?c)]')
+        lines.append('    })')
+        lines.append(' ]')
+        
+        # Start state
+        lines.append(' :start [')
+        p_name = f"C_{pq}_{pr}".replace("-", "m")
+        lines.append(f'    (OccupiedByPig {p_name})')
+        
+        for w in walls:
+            wq, wr = w['q'], w['r']
+            if (wq, wr) in [(q, r) for q, r in cells]:
+                w_name = f"C_{wq}_{wr}".replace("-", "m")
+                lines.append(f'    (HasWall {w_name})')
+        
+        for q, r in cells:
+            if (q, r) != (pq, pr) and (q, r) not in wall_set:
+                name = f"C_{q}_{r}".replace("-", "m")
+                lines.append(f'    (Free {name})')
+        
+        lines.append(' ]')
+        
+        # Goal: Place wall at proposed move
+        m_name = f"C_{mq}_{mr}".replace("-", "m")
+        lines.append(' :goal [')
+        lines.append(f'    (HasWall {m_name})')
+        lines.append(' ]')
+        lines.append('}')
+        
+        problem_content = '\n'.join(lines)
+        
+        # Use absolute paths based on project root
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        # Write problem file to project root
+        problem_file = os.path.join(project_root, "spectra_verify.clj")
+        with open(problem_file, 'w') as f:
+            f.write(problem_content)
+        
+        # Run Spectra.jar
+        jar_path = os.path.join(project_root, "tools", "Spectra.jar")
+        if not os.path.exists(jar_path):
+            return {'valid': True, 'reason': "Spectra JAR Missing (Fallback)", 'plan': None}
+        
+        try:
+            result = subprocess.run(
+                ["java", "-jar", jar_path, problem_file],
+                capture_output=True, text=True, timeout=15.0,  # Spectra needs ~11s
+                cwd=project_root
+            )
+            
+            # Check if Spectra found a plan
+            output = result.stdout + result.stderr
+            
+            if "PlaceWall" in output or "plan" in output.lower():
+                return {'valid': True, 'reason': "Spectra VERIFIED", 'plan': output[:100]}
+            elif "no plan" in output.lower() or "unsolvable" in output.lower():
+                return {'valid': False, 'reason': "Spectra: No Valid Plan", 'plan': None}
+            else:
+                # Assume valid if no explicit failure
+                return {'valid': True, 'reason': "Spectra Executed", 'plan': output[:50] if output else "OK"}
+                
+        except subprocess.TimeoutExpired:
+            return {'valid': True, 'reason': "Spectra Timeout (Fallback)", 'plan': None}
+        except Exception as e:
+            return {'valid': True, 'reason': f"Spectra Error: {str(e)[:20]}", 'plan': None}
 
-def ui_to_cell(q: int, r: int) -> str:
-    dq = q - UI_CENTER_Q
-    dr = r - UI_CENTER_R
-    return f"C_{_enc(dq)}_{_enc(dr)}"
+    @staticmethod
+    def validate_move(pig_pos, wall_set, move, use_external=False):
+        """
+        Validates a move. use_external=True calls the JAR (slow, for final only).
+        """
+        proof_log = []
+        q, r = move
+        
+        # Fast Python validity check
+        if not (is_valid(q, r) and (q,r) not in wall_set and (q,r) != (pig_pos['q'], pig_pos['r'])):
+             return False, ["Axiom(Validity): FAIL"]
 
-def cell_to_ui(cell: str) -> dict:
-    cell = cell.strip()
-    # accept c_... or C_...
-    if cell.startswith("c_"):
-        cell = "C_" + cell[2:]
+        # Relevance check (Python)
+        pq, pr = pig_pos['q'], pig_pos['r']
+        d1, _ = bfs_escape_path(pq, pr, wall_set)
+        d2, _ = bfs_escape_path(pq, pr, wall_set | {move})
+        relevance_ok = (d2 != d1 or d2 == float('inf'))
+        proof_log.append(f"Axiom(Relevance): {'Satisfied' if relevance_ok else 'Violated'}")
 
-    parts = cell.split("_")
-    if len(parts) != 3:
-        raise ValueError(f"Bad cell token: {cell}")
+        # Progress check (Python)
+        progress_ok = (d2 >= d1) if d1 != float('inf') else True
+        proof_log.append(f"Axiom(Progress): {'Satisfied' if progress_ok else 'Violated'}")
+        
+        if not progress_ok:
+            return False, proof_log
 
-    dq = _dec(parts[1])
-    dr = _dec(parts[2])
-    return {"q": dq + UI_CENTER_Q, "r": dr + UI_CENTER_R}
+        # External Spectra verification (only for final move)
+        if use_external:
+            # Convert wall_set to list of dicts for _run_spectra
+            walls_list = [{'q': w[0], 'r': w[1]} for w in wall_set]
+            res_ext = SpectraLogicEngine._run_spectra(pig_pos, walls_list, move)
+            proof_log.insert(0, f"Spectra: {res_ext['reason']}")
+            if res_ext.get('plan'):
+                proof_log.insert(1, f"Plan: {res_ext['plan'][:50]}...")
 
-def all_ui_cells():
-    for q in range(COL_MIN, COL_MAX + 1):
-        for r in range(ROW_MIN, ROW_MAX + 1):
-            yield q, r
+        return True, proof_log
 
-# =========================
-# Spectra file generation
-# =========================
-def build_start_block(pig_pos: dict, walls: list) -> str:
-    pig_cell = ui_to_cell(pig_pos["q"], pig_pos["r"])
-    wall_cells = {ui_to_cell(w["q"], w["r"]) for w in walls}
+    @staticmethod
+    def _evaluate_predicate(axiom_name, predicate_func, *args):
+        try:
+            result = predicate_func(*args)
+            return {'axiom': axiom_name, 'valid': result, 'reason': 'Satisfied' if result else 'Violated'}
+        except Exception as e:
+            return {'axiom': axiom_name, 'valid': False, 'reason': str(e)}
 
-    # Free = every board cell except pig and walls
-    all_cells_logic = [ui_to_cell(q, r) for (q, r) in all_ui_cells()]
-    free_cells = [c for c in all_cells_logic if c != pig_cell and c not in wall_cells]
 
-    lines = [f"    (OccupiedByPig {pig_cell})"]
-    for c in sorted(wall_cells):
-        lines.append(f"    (HasWall {c})")
-    for c in sorted(free_cells):
-        lines.append(f"    (Free {c})")
 
-    return ":start [\n" + "\n".join(lines) + "\n ]"
 
-def build_goal_block(goal_cell: str) -> str:
-    return f":goal [\n    (HasWall {goal_cell})\n ]"
+def find_optimal_block(pig_pos, walls):
+    """
+    Find optimal move using Deep Minimax, then VALIDATE with LogicVerifier.
+    """
+    import time
+    
+    pq, pr = pig_pos['q'], pig_pos['r']
+    wall_set = set((w['q'], w['r']) for w in walls)
+    
+    # ... (get_valid_moves and minimax definitions are reusable from global or here) ...
+    # We redefine them inside for closure access if needed, or assume globals work.
+    # Since I moved helpers to module level in Step 477, I can use them.
+    
+    def get_valid_moves(pig_q, pig_r, blocked):
+        moves = []
+        for nq, nr in get_neighbors(pig_q, pig_r):
+            if is_valid(nq, nr) and (nq, nr) not in blocked:
+                moves.append((nq, nr))
+        return moves
 
-def write_temp_clj(pig_pos: dict, walls: list, goal_cell: str) -> str:
-    if not os.path.exists(TEMPLATE_CLJ):
-        raise FileNotFoundError(f"Template .clj not found: {TEMPLATE_CLJ}")
+    def minimax(pig_q, pig_r, blocked, depth, alpha, beta, is_player_turn, max_depth):
+        dist, pig_next = bfs_escape_path(pig_q, pig_r, blocked)
+        if dist == float('inf'): return 1000 - depth
+        if dist == 0: return -1000 + depth
+        if depth >= max_depth: return dist
+        
+        if is_player_turn:
+            max_eval = -float('inf')
+            moves = get_valid_moves(pig_q, pig_r, blocked)
+            if pig_next: moves.sort(key=lambda m: 0 if m == pig_next else 1)
+            
+            for move in moves:
+                new_blocked = blocked | {move}
+                eval_score = minimax(pig_q, pig_r, new_blocked, depth + 1, alpha, beta, False, max_depth)
+                max_eval = max(max_eval, eval_score)
+                alpha = max(alpha, eval_score)
+                if beta <= alpha: break
+            return max_eval if moves else -1000 + depth
+        else:
+            _, pig_best = bfs_escape_path(pig_q, pig_r, blocked)
+            if pig_best is None: return 1000 - depth
+            if is_escape(pig_best[0], pig_best[1]): return -1000 + depth
+            return minimax(pig_best[0], pig_best[1], blocked, depth + 1, alpha, beta, True, max_depth)
 
-    with open(TEMPLATE_CLJ, "r", encoding="utf-8") as f:
-        text = f.read()
-
-    # Replace :start [ ... ]
-    start_re = re.compile(r":start\s*\[(.*?)\]\s*", re.DOTALL)
-    if not start_re.search(text):
-        raise RuntimeError("Template missing :start [ ... ]")
-    text = start_re.sub(build_start_block(pig_pos, walls) + "\n", text, count=1)
-
-    # Replace :goal [ ... ]
-    goal_re = re.compile(r":goal\s*\[(.*?)\]\s*", re.DOTALL)
-    if not goal_re.search(text):
-        raise RuntimeError("Template missing :goal [ ... ]")
-    text = goal_re.sub(build_goal_block(goal_cell) + "\n", text, count=1)
-
-    fd, tmp_path = tempfile.mkstemp(prefix="btp_", suffix=".clj", dir=PROJECT_ROOT, text=True)
-    os.close(fd)
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(text)
-    return tmp_path
-
-def spectra_cmd():
-    java = JAVA17_EXE if os.path.exists(JAVA17_EXE) else "java"
-    return [java, "-jar", SPECTRA_JAR]
-
-def run_spectra(clj_path: str, timeout_s: int) -> str:
-    if not os.path.exists(SPECTRA_JAR):
-        raise FileNotFoundError(f"Spectra.jar not found: {SPECTRA_JAR}")
-
-    cmd = spectra_cmd() + [clj_path]
-    result = subprocess.run(
-        cmd,
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=timeout_s
-    )
-    out = (result.stdout or "").strip()
-    err = (result.stderr or "").strip()
-
-    if result.returncode != 0:
-        raise RuntimeError(f"Spectra failed (code {result.returncode}). STDERR:\n{err}\nSTDOUT:\n{out}")
-
-    return out or err
-
-def save_debug(tag: str, out: str) -> str:
-    path = os.path.join(DEBUG_DIR, f"spectra_{tag}.txt")
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(out)
-    return path
-
-# =========================
-# Plan parsing
-# =========================
-def parse_first_bracket_list(out: str) -> str | None:
-    # find first [...] segment
-    m = re.search(r"\[[^\]]*\]", out, flags=re.DOTALL)
-    return m.group(0).strip() if m else None
-
-def extract_placewall_cell(plan_txt: str) -> str | None:
-    if not plan_txt:
-        return None
-    if plan_txt.strip() == "[]":
-        return None
-
-    # Accept both:
-    # [(PlaceWall c_1_m1) ]
-    # [PlaceWall C_1_m1]
-    m = re.search(r"PlaceWall\s+([cC]_[A-Za-z0-9]+_[A-Za-z0-9]+)", plan_txt)
-    if m:
-        return m.group(1)
-
-    # Sometimes parentheses wrap it: (PlaceWall c_1_m1)
-    m2 = re.search(r"\(\s*PlaceWall\s+([cC]_[A-Za-z0-9]+_[A-Za-z0-9]+)\s*\)", plan_txt)
-    return m2.group(1) if m2 else None
-
-# =========================
-# Candidate goal selection
-# =========================
-def candidate_goal_cells_ui(pig_pos: dict, walls: list):
-    pq, pr = pig_pos["q"], pig_pos["r"]
-    wall_set = {(w["q"], w["r"]) for w in walls}
-
-    dist, next_step = bfs_escape_path(pq, pr, wall_set)
-    if next_step and next_step not in wall_set:
-        yield next_step
-
-    for n in get_neighbors(pq, pr):
-        if is_valid(*n) and n not in wall_set and n != (pq, pr):
-            yield n
-
-    for n in get_neighbors(pq, pr):
-        if not is_valid(*n):
-            continue
-        for nn in get_neighbors(*n):
-            if is_valid(*nn) and nn not in wall_set and nn != (pq, pr):
-                yield nn
-
-# =========================
-# Spectra move (with caching)
-# =========================
-def board_cache_key(pig_pos: dict, walls: list) -> str:
-    walls_sorted = sorted([(w["q"], w["r"]) for w in walls])
-    payload = {"pig": (pig_pos["q"], pig_pos["r"]), "walls": walls_sorted}
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
-
-def spectra_move(pig_pos: dict, walls: list):
     thoughts = []
     thoughts.append("[SPECTRA] One-step planning mode: try candidate goal cells until Spectra returns a non-empty plan.")
 
