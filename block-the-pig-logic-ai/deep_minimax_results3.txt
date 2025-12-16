@@ -1,0 +1,20 @@
+﻿============================================================
+DEEP MINIMAX TEST (max_depth=12)
+============================================================
+  LOSS: 5 walls, game 6
+  LOSS: 5 walls, game 7
+  LOSS: 5 walls, game 8
+  LOSS: 5 walls, game 12
+  LOSS: 5 walls, game 16
+  LOSS: 5 walls, game 18
+5 walls + 3 opening: 14/20 wins (70%) in 1.8s
+8 walls + 3 opening: 20/20 wins (100%) in 1.4s
+10 walls + 3 opening: 20/20 wins (100%) in 0.9s
+15 walls + 3 opening: 20/20 wins (100%) in 0.4s
+
+============================================================
+STRESS TEST (50 games each)
+============================================================
+5 walls + 3 opening: 26/50 wins (52%)
+10 walls + 3 opening: 50/50 wins (100%)
+15 walls + 3 opening: 50/50 wins (100%)

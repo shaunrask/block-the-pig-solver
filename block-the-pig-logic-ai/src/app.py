@@ -13,17 +13,14 @@ def index():
 
 def find_optimal_block(pig_pos, walls):
     """
-    Find the optimal cell to block using 2-ply minimax:
-    1. We place a wall
-    2. Pig makes its best move (toward escape)
-    3. Evaluate the resulting escape distance
-    
-    The best wall is one that maximizes escape distance AFTER pig responds.
+    Find the optimal cell to block using deep minimax with alpha-beta pruning.
+    Searches multiple moves ahead to find guaranteed winning strategies.
     
     Returns:
         (best_move_dict, thoughts_list)
     """
     from collections import deque
+    import time
     
     pq, pr = pig_pos['q'], pig_pos['r']
     wall_set = set((w['q'], w['r']) for w in walls)
@@ -41,135 +38,149 @@ def find_optimal_block(pig_pos, walls):
         if not is_valid(q, r): return False
         return q == COL_MIN or q == COL_MAX or r == ROW_MIN or r == ROW_MAX
     
-    def bfs_escape_distance(start_q, start_r, blocked_cells):
-        """BFS to find minimum distance from a position to any escape cell."""
+    def bfs_escape_path(start_q, start_r, blocked_cells):
+        """Returns (distance, first_step) to escape."""
         if is_escape(start_q, start_r):
-            return 0
-            
-        queue = deque([(start_q, start_r, 0)])
+            return 0, None
+        queue = deque([(start_q, start_r, 0, None)])  # (q, r, dist, first_step)
         visited = {(start_q, start_r)}
-        
         while queue:
-            q, r, dist = queue.popleft()
-            
+            q, r, dist, first = queue.popleft()
             for nq, nr in get_neighbors(q, r):
                 if is_valid(nq, nr) and (nq, nr) not in visited and (nq, nr) not in blocked_cells:
+                    new_first = first if first else (nq, nr)
                     if is_escape(nq, nr):
-                        return dist + 1
+                        return dist + 1, new_first
                     visited.add((nq, nr))
-                    queue.append((nq, nr, dist + 1))
-        
-        return float('inf')
+                    queue.append((nq, nr, dist + 1, new_first))
+        return float('inf'), None
     
-    def get_pig_best_move(pig_q, pig_r, blocked_cells):
-        """Get the pig's best move (first step on shortest path to escape)."""
-        if is_escape(pig_q, pig_r):
-            return (pig_q, pig_r)  # Already escaped
+    def get_valid_moves(pig_q, pig_r, blocked):
+        """Get valid wall placements (neighbors of pig)."""
+        moves = []
+        for nq, nr in get_neighbors(pig_q, pig_r):
+            if is_valid(nq, nr) and (nq, nr) not in blocked:
+                moves.append((nq, nr))
+        return moves
+    
+    def minimax(pig_q, pig_r, blocked, depth, alpha, beta, is_player_turn, max_depth):
+        """
+        Minimax with alpha-beta pruning.
+        Returns: score (positive = good for player, negative = good for pig)
+        """
+        dist, pig_next = bfs_escape_path(pig_q, pig_r, blocked)
         
-        # BFS to find path
-        queue = deque([(pig_q, pig_r, [])])
-        visited = {(pig_q, pig_r)}
+        # Terminal states
+        if dist == float('inf'):
+            return 1000 - depth  # Win! Earlier wins are better
+        if dist == 0:
+            return -1000 + depth  # Pig escaped
+        if depth >= max_depth:
+            return dist  # Heuristic: escape distance
         
-        while queue:
-            q, r, path = queue.popleft()
+        if is_player_turn:
+            # Player places a wall - maximize
+            max_eval = -float('inf')
+            moves = get_valid_moves(pig_q, pig_r, blocked)
             
-            if is_escape(q, r):
-                if path:
-                    return path[0]  # First step
-                return (q, r)
+            # Sort moves by heuristic (blocking escape path first)
+            if pig_next:
+                moves.sort(key=lambda m: 0 if m == pig_next else 1)
             
-            for nq, nr in get_neighbors(q, r):
-                if is_valid(nq, nr) and (nq, nr) not in visited and (nq, nr) not in blocked_cells:
-                    visited.add((nq, nr))
-                    queue.append((nq, nr, path + [(nq, nr)]))
-        
-        return None  # Trapped
+            for move in moves:
+                new_blocked = blocked | {move}
+                eval_score = minimax(pig_q, pig_r, new_blocked, depth + 1, alpha, beta, False, max_depth)
+                max_eval = max(max_eval, eval_score)
+                alpha = max(alpha, eval_score)
+                if beta <= alpha:
+                    break
+            return max_eval if moves else -1000 + depth
+        else:
+            # Pig moves - minimize
+            min_eval = float('inf')
+            _, pig_best = bfs_escape_path(pig_q, pig_r, blocked)
+            
+            if pig_best is None:
+                return 1000 - depth  # Pig trapped
+            
+            # Pig always takes optimal move (toward escape)
+            if is_escape(pig_best[0], pig_best[1]):
+                return -1000 + depth  # Pig escapes
+            
+            eval_score = minimax(pig_best[0], pig_best[1], blocked, depth + 1, alpha, beta, True, max_depth)
+            return eval_score
     
     thoughts = []
     
-    # Current escape distance without any new wall
-    current_distance = bfs_escape_distance(pq, pr, wall_set)
-    thoughts.append(f"Current escape distance: {current_distance if current_distance != float('inf') else 'trapped'}")
+    # Check current state
+    dist, _ = bfs_escape_path(pq, pr, wall_set)
+    thoughts.append(f"Current escape distance: {dist if dist != float('inf') else 'trapped'}")
     
-    if current_distance == float('inf'):
+    if dist == float('inf'):
         thoughts.append("Pig is already trapped!")
         return None, thoughts
-    
-    if current_distance == 0:
-        thoughts.append("Pig is already at an escape - too late to block!")
+    if dist == 0:
+        thoughts.append("Pig is at escape!")
         return None, thoughts
     
-    # Get candidate cells: neighbors of pig + cells within 2 steps
-    candidates = set()
-    
+    # Get candidate moves - neighbors + cells within 2-3 steps for strategic blocking
+    moves = set()
     for nq, nr in get_neighbors(pq, pr):
         if is_valid(nq, nr) and (nq, nr) not in wall_set:
-            candidates.add((nq, nr))
+            moves.add((nq, nr))
+            # Also consider neighbors of neighbors
+            for nnq, nnr in get_neighbors(nq, nr):
+                if is_valid(nnq, nnr) and (nnq, nnr) not in wall_set and (nnq, nnr) != (pq, pr):
+                    moves.add((nnq, nnr))
     
-    for nq, nr in list(candidates):
-        for nnq, nnr in get_neighbors(nq, nr):
-            if is_valid(nnq, nnr) and (nnq, nnr) not in wall_set and (nnq, nnr) != (pq, pr):
-                candidates.add((nnq, nnr))
+    moves = list(moves)
+    if not moves:
+        thoughts.append("No valid moves")
+        return None, thoughts
     
-    thoughts.append(f"Evaluating {len(candidates)} moves with lookahead...")
+    # Sort moves by proximity to pig's escape path
+    _, pig_next = bfs_escape_path(pq, pr, wall_set)
+    if pig_next:
+        moves.sort(key=lambda m: 0 if m == pig_next else 1)
     
-    # Evaluate each candidate with 2-ply minimax
-    best_cell = None
+    # Use iterative deepening with higher max depth
+    start_time = time.time()
+    best_move = moves[0]
     best_score = -float('inf')
+    max_depth = 16  # Deeper search for better strategy
     
-    for cell in candidates:
-        # Step 1: Place wall
-        test_walls = wall_set | {cell}
+    for depth_limit in range(2, max_depth + 1, 2):
+        if time.time() - start_time > 3.0:  # 3 second time limit
+            break
         
-        # Check if this immediately traps the pig
-        dist_after_wall = bfs_escape_distance(pq, pr, test_walls)
-        if dist_after_wall == float('inf'):
-            # Winning move!
-            thoughts.append(f"Found winning move at ({cell[0]}, {cell[1]}) - traps the pig!")
-            return {'q': cell[0], 'r': cell[1]}, thoughts
+        current_best = None
+        current_best_score = -float('inf')
         
-        # Step 2: Simulate pig's response (pig moves toward escape)
-        pig_move = get_pig_best_move(pq, pr, test_walls)
+        for move in moves:
+            new_blocked = wall_set | {move}
+            score = minimax(pq, pr, new_blocked, 1, -float('inf'), float('inf'), False, depth_limit)
+            
+            if score > current_best_score:
+                current_best_score = score
+                current_best = move
+            
+            # Early exit on guaranteed win
+            if score >= 900:
+                thoughts.append(f"Found winning move at ({move[0]}, {move[1]}) (depth {depth_limit})")
+                return {'q': move[0], 'r': move[1]}, thoughts
         
-        if pig_move is None:
-            # Pig would be trapped after our wall
-            thoughts.append(f"Found winning move at ({cell[0]}, {cell[1]}) - traps the pig!")
-            return {'q': cell[0], 'r': cell[1]}, thoughts
-        
-        # Step 3: Evaluate position after pig moves
-        new_pig_q, new_pig_r = pig_move
-        
-        # Check if pig escapes
-        if is_escape(new_pig_q, new_pig_r):
-            # This wall placement lets pig escape - bad!
-            score = -100
-        else:
-            # Score = escape distance from pig's new position
-            score = bfs_escape_distance(new_pig_q, new_pig_r, test_walls)
-            if score == float('inf'):
-                score = 100  # Trapped = very good
-        
-        if score > best_score:
-            best_score = score
-            best_cell = cell
+        if current_best:
+            best_move = current_best
+            best_score = current_best_score
     
-    if best_cell:
-        if best_score == 100:
-            thoughts.append(f"Best block: ({best_cell[0]}, {best_cell[1]}) - forces trap after pig moves")
-        elif best_score > 0:
-            thoughts.append(f"Best block: ({best_cell[0]}, {best_cell[1]}) - escape distance after pig moves: {best_score}")
-        else:
-            thoughts.append(f"Best defensive block: ({best_cell[0]}, {best_cell[1]})")
-        return {'q': best_cell[0], 'r': best_cell[1]}, thoughts
+    if best_score >= 900:
+        thoughts.append(f"Winning block: ({best_move[0]}, {best_move[1]})")
+    elif best_score > 0:
+        thoughts.append(f"Best block: ({best_move[0]}, {best_move[1]}) (score: {best_score})")
+    else:
+        thoughts.append(f"Defensive block: ({best_move[0]}, {best_move[1]})")
     
-    # Fallback: block first neighbor
-    for nq, nr in get_neighbors(pq, pr):
-        if is_valid(nq, nr) and (nq, nr) not in wall_set:
-            thoughts.append(f"Fallback: blocking neighbor ({nq}, {nr})")
-            return {'q': nq, 'r': nr}, thoughts
-    
-    thoughts.append("No valid moves available")
-    return None, thoughts
+    return {'q': best_move[0], 'r': best_move[1]}, thoughts
 
 
 @app.route('/api/move', methods=['POST'])

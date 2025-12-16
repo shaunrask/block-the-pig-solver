@@ -1,0 +1,22 @@
+﻿============================================================
+REALISTIC GAME SIMULATION
+(8 initial walls + 3 opening moves, matching actual game)
+============================================================
+
+100 games with 8 initial walls + 3 opening moves:
+  Wins: 22
+  Losses: 78
+  Win rate: 22%
+
+============================================================
+VARYING INITIAL CONDITIONS
+============================================================
+  5 initial walls, 0 opening moves: 0/50 wins (0%)
+  5 initial walls, 3 opening moves: 5/50 wins (10%)
+  5 initial walls, 5 opening moves: 15/50 wins (30%)
+  10 initial walls, 0 opening moves: 4/50 wins (8%)
+  10 initial walls, 3 opening moves: 15/50 wins (30%)
+  10 initial walls, 5 opening moves: 38/50 wins (76%)
+  15 initial walls, 0 opening moves: 15/50 wins (30%)
+  15 initial walls, 3 opening moves: 30/50 wins (60%)
+  15 initial walls, 5 opening moves: 48/50 wins (96%)
