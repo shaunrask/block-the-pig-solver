@@ -122,23 +122,23 @@
  ]
  :start [
     (OccupiedByPig C_2_5)
-    (HasWall C_0_4)
-    (HasWall C_3_4)
-    (HasWall C_2_7)
-    (HasWall C_0_3)
-    (HasWall C_0_6)
+    (HasWall C_1_5)
+    (HasWall C_2_3)
+    (HasWall C_1_7)
+    (HasWall C_2_6)
+    (HasWall C_0_5)
     (HasWall C_1_6)
-    (HasWall C_3_5)
-    (Free C_0_5)
+    (Free C_0_3)
+    (Free C_0_4)
+    (Free C_0_6)
     (Free C_0_7)
     (Free C_1_3)
     (Free C_1_4)
-    (Free C_1_5)
-    (Free C_1_7)
-    (Free C_2_3)
     (Free C_2_4)
-    (Free C_2_6)
+    (Free C_2_7)
     (Free C_3_3)
+    (Free C_3_4)
+    (Free C_3_5)
     (Free C_3_6)
     (Free C_3_7)
     (Free C_4_3)
@@ -148,6 +148,6 @@
     (Free C_4_7)
  ]
  :goal [
-    (HasWall C_2_4)
+    (HasWall C_3_5)
  ]
 }
