@@ -1,4 +1,5 @@
 # Cracking Block the Pig
+<img width="256" height="256" alt="715RJ7zokhL" src="https://github.com/user-attachments/assets/7810ce31-7c39-4287-8c9e-1ea6535840ea" />
 
 # How to Run
 
